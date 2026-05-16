@@ -1,0 +1,24 @@
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# USD 캐시
+.thumbs/
+*.usd.autosave
+
+# Isaac Sim 빌드
+_build/
+_compiler/
+
+# ROS2 빌드
+build/
+install/
+log/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
