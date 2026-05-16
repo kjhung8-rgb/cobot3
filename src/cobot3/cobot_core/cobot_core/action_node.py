@@ -1,5 +1,3 @@
-# ~/dev_ws/src/artbot_motion/artbot_motion/motion_node.py
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -17,38 +15,27 @@ class ActionNode(Node):
             String,
             "/jetbot/action_command",
             self.command_callback,
-            10
+            10,
         )
 
-        self.get_logger().info("Action Node 시작됨")
+        self.get_logger().info("✅ action_node started")
+        self.get_logger().info("📡 Subscribed: /jetbot/action_command")
 
     def command_callback(self, msg):
         command = msg.data.strip()
+
+        if not command:
+            self.get_logger().warn("빈 명령 수신")
+            return
+
         self.get_logger().info(f"명령 수신: {command}")
 
-        if command == "forward":
-            self.manager.perform("move_forward", speed=0.25, duration=2.0)
+        success = self.manager.perform(command)
 
-        elif command == "backward":
-            self.manager.perform("move_backward", speed=0.2, duration=1.0)
-
-        elif command == "left":
-            self.manager.perform("rotate_left", speed=0.7, duration=1.0)
-
-        elif command == "right":
-            self.manager.perform("rotate_right", speed=0.7, duration=1.0)
-
-        elif command == "stop":
-            self.manager.perform("stop")
-
-        elif command == "patrol":
-            self.manager.perform("patrol")
-
-        elif command == "greeting":
-            self.manager.perform("greeting_motion")
-
+        if success:
+            self.get_logger().info(f"명령 완료: {command}")
         else:
-            self.get_logger().warn(f"알 수 없는 명령: {command}")
+            self.get_logger().warn(f"명령 실패: {command}")
 
 
 def main(args=None):
@@ -58,8 +45,10 @@ def main(args=None):
 
     try:
         rclpy.spin(node)
+
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("KeyboardInterrupt - action_node 종료")
+
     finally:
         node.manager.stop()
         node.destroy_node()
