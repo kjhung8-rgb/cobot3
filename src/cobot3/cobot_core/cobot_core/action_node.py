@@ -24,31 +24,13 @@ class ActionNode(Node):
 
     def command_callback(self, msg):
         command = msg.data.strip()
+
         self.get_logger().info(f"명령 수신: {command}")
 
-        if command == "forward":
-            self.manager.perform("move_forward", speed=0.25, duration=2.0)
+        success = self.manager.perform(command)
 
-        elif command == "backward":
-            self.manager.perform("move_backward", speed=0.2, duration=1.0)
-
-        elif command == "left":
-            self.manager.perform("rotate_left", speed=0.7, duration=1.0)
-
-        elif command == "right":
-            self.manager.perform("rotate_right", speed=0.7, duration=1.0)
-
-        elif command == "stop":
-            self.manager.perform("stop")
-
-        elif command == "patrol":
-            self.manager.perform("patrol")
-
-        elif command == "greeting":
-            self.manager.perform("greeting_motion")
-
-        else:
-            self.get_logger().warn(f"알 수 없는 명령: {command}")
+        if not success:
+            self.get_logger().warn(f"명령 실행 실패: {command}")
 
 
 def main(args=None):
