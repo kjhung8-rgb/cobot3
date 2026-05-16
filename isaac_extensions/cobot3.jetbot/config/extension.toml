@@ -1,0 +1,22 @@
+[package]
+version = "0.1.0"
+title = "Cobot3 JetBot"
+description = "Cobot3 JetBot extension"
+category = "Simulation"
+keywords = ["isaac sim", "jetbot", "cobot3"]
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+"omni.graph" = {}
+"omni.graph.action" = {}
+"omni.graph.nodes" = {}
+
+"isaacsim.core.api" = {}
+"isaacsim.core.nodes" = {}
+"isaacsim.robot.wheeled_robots" = {}
+"isaacsim.ros2.bridge" = {}
+
+[[python.module]]
+name = "cobot3.jetbot"
+

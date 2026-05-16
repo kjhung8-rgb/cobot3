@@ -1,0 +1,108 @@
+# =========================
+# ROS2 / colcon build files
+# =========================
+build/
+install/
+log/
+
+# colcon metadata
+.colcon/
+.colcon_install_layout
+
+
+# =========================
+# Isaac Sim installation
+# =========================
+# Isaac Sim 설치 폴더는 용량도 크고 Git 관리 대상 아님
+isaac_sim/
+isaacsim/
+IsaacSim-ros_workspaces/
+
+
+# =========================
+# Python cache
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+
+# =========================
+# Python virtual environments
+# =========================
+.venv/
+venv/
+env/
+ENV/
+
+
+# =========================
+# Isaac Sim / Omniverse cache
+# =========================
+.cache/
+.omniverse/
+*.kit
+*.kit.log
+*.log
+*.dmp
+
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+
+# =========================
+# Test / coverage
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
+*.bak
+
+
+# =========================
+# Large simulation outputs
+# =========================
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.bag
+*.db3
+*.sqlite3
+*.pcd
+*.npy
+*.npz
+
+
+# =========================
+# Do not ignore source files
+# =========================
+!src/
+!src/cobot3/
+!isaac_extensions/
+!isaac_extensions/cobot3.jetbot/
