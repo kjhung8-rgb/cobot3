@@ -21,4 +21,5 @@ cobot3/
 
 ## 터미널
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
 ros2 run rqt_image_view rqt_image_view
