@@ -22,3 +22,6 @@ Thumbs.db
 
 # VS Code
 .vscode/
+
+# Json 테스트 파일
+src/cobot3/cobot_core/test_commands/*.json
