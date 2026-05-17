@@ -25,6 +25,6 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ros2 run rqt_image_view rqt_image_view
 
 
-## ROS2 모션 구현 시
-1. ros2 run cobot_core action_node
-2. ros2 topic pub /jetbot/action_command std_msgs/msg/String "{data: 'task 내 .py 이름'}" --once
+## ROS2 모션 구현 및 테스트
+1. ros2 launch cobot_core robot_system.launch.py    
+2. ros2 run cobot_core send_json_command jetbot_test
