@@ -13,13 +13,13 @@ class ActionNode(Node):
 
         self.command_sub = self.create_subscription(
             String,
-            "/jetbot/action_command",
+            "action_command",
             self.command_callback,
             10,
         )
 
         self.get_logger().info("✅ action_node started")
-        self.get_logger().info("📡 Subscribed: /jetbot/action_command")
+        self.get_logger().info(f"📡 Namespace: {self.get_namespace()} / Subscribed: action_command")
 
     def command_callback(self, msg):
         command = msg.data.strip()
