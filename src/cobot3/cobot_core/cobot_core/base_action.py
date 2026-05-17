@@ -7,7 +7,7 @@ from geometry_msgs.msg import Twist
 class BaseAction:
     def __init__(self, node):
         self.node = node
-        self.cmd_pub = node.create_publisher(Twist, "/cmd_vel", 10)
+        self.cmd_pub = node.create_publisher(Twist, "cmd_vel", 10)
 
     def publish_cmd(self, linear_x=0.0, angular_z=0.0):
         msg = Twist()
