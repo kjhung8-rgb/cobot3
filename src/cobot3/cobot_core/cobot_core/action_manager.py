@@ -3,62 +3,47 @@ from .task.patrol import Patrol
 
 
 class ActionManager:
-    """고수준 action/task를 등록하고 실행하는 공통 매니저.
-
-    로봇별 저수준 동작은 self.base_action에 위임한다.
-    따라서 Patrol 같은 task 파일은 JetBot/Spot 구분 없이
-    manager.move_forward(), manager.rotate_left() 같은 공통 메서드만 호출하면 된다.
-    """
-
     def __init__(self, node):
         self.node = node
         self.base_action = create_base_action(node)
         self.actions = {}
         self._register_actions()
 
-    # =========================
-    # 로봇별 저수준 액션 위임
-    # =========================
-    def stop(self, **kwargs):
-        return self.base_action.stop(**kwargs)
+    def __getattr__(self, name):
+        """Delegate unknown methods to selected robot base action.
 
-    def move_forward(self, **kwargs):
-        return self.base_action.move_forward(**kwargs)
+        예: self.move_forward() -> self.base_action.move_forward()
+        """
+        return getattr(self.base_action, name)
 
-    def move_backward(self, **kwargs):
-        return self.base_action.move_backward(**kwargs)
-
-    def rotate_left(self, **kwargs):
-        return self.base_action.rotate_left(**kwargs)
-
-    def rotate_right(self, **kwargs):
-        return self.base_action.rotate_right(**kwargs)
-
-    def wait(self, **kwargs):
-        return self.base_action.wait(**kwargs)
-
-    def publish_cmd(self, **kwargs):
-        return self.base_action.publish_cmd(**kwargs)
+    def _add_action_if_exists(self, name, method_name=None):
+        method_name = method_name or name
+        if hasattr(self.base_action, method_name):
+            self.actions[name] = getattr(self.base_action, method_name)
 
     def _register_actions(self):
         # =========================
         # 저수준 이동 액션
         # =========================
-        self.actions["stop"] = self.stop
+        self._add_action_if_exists("stop")
 
-        self.actions["move_forward"] = self.move_forward
-        self.actions["forward"] = self.move_forward
+        self._add_action_if_exists("move_forward")
+        self._add_action_if_exists("forward", "move_forward")
 
-        self.actions["move_backward"] = self.move_backward
-        self.actions["backward"] = self.move_backward
+        self._add_action_if_exists("move_backward")
+        self._add_action_if_exists("backward", "move_backward")
 
-        self.actions["rotate_left"] = self.rotate_left
-        self.actions["left"] = self.rotate_left
+        self._add_action_if_exists("rotate_left")
+        self._add_action_if_exists("left", "rotate_left")
 
-        self.actions["rotate_right"] = self.rotate_right
-        self.actions["right"] = self.rotate_right
+        self._add_action_if_exists("rotate_right")
+        self._add_action_if_exists("right", "rotate_right")
 
-        self.actions["wait"] = self.wait
+        self._add_action_if_exists("wait")
+
+        # Spot 등 특정 로봇 전용 액션. 없으면 등록 안 됨.
+        self._add_action_if_exists("stand")
+        self._add_action_if_exists("sit")
 
         # =========================
         # 고수준 task 액션
@@ -66,7 +51,7 @@ class ActionManager:
         self.actions[Patrol.action_name] = Patrol(self).execute
 
     def perform(self, action_name, **kwargs):
-        action_name = action_name.strip()
+        action_name = str(action_name).strip()
 
         if action_name not in self.actions:
             self.node.get_logger().error(

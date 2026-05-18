@@ -12,13 +12,17 @@ class CommandRouter(Node):
         /robot_command
 
     Input JSON example:
-        {"robot": "jetbot", "command": "move_forward", "params": {"duration": 1.0}}
+        {"robot": "jetbot", "command": "move_forward"}
+        {"robot": "spot", "command": "patrol"}
+        {"robot": "spot", "command": "move_forward", "params": {"speed": 0.2, "duration": 1.0}}
 
     Output topic:
         /{robot}/action_command
 
     Output message:
-        JSON string with command/action and params.
+        std_msgs/String.
+        - params가 없으면 기존 호환을 위해 command 문자열만 전송
+        - params가 있으면 JSON 문자열로 전송
     """
 
     def __init__(self):
@@ -78,9 +82,6 @@ class CommandRouter(Node):
         ).strip()
 
         params = data.get("params") or {}
-        if not isinstance(params, dict):
-            self.get_logger().warn(f"params가 dict가 아님. 무시함: {params}")
-            params = {}
 
         if not robot_name:
             self.get_logger().warn(f"robot 값이 비어있음: {data}")
@@ -90,16 +91,21 @@ class CommandRouter(Node):
             self.get_logger().warn(f"command/action 값이 비어있음: {data}")
             return
 
+        if not isinstance(params, dict):
+            self.get_logger().warn(f"params는 dict여야 함: {params}")
+            return
+
         topic, publisher = self._get_publisher(robot_name)
 
         out = String()
-        out.data = json.dumps(
-            {
-                "command": command,
-                "params": params,
-            },
-            ensure_ascii=False,
-        )
+        if params:
+            out.data = json.dumps(
+                {"command": command, "params": params},
+                ensure_ascii=False,
+            )
+        else:
+            out.data = command
+
         publisher.publish(out)
 
         self.get_logger().info(
