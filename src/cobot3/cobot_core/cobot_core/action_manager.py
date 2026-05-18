@@ -1,8 +1,8 @@
-from .base_action import BaseAction
+from .base_action import JetbotBaseAction
 from .task.patrol import Patrol
 
 
-class ActionManager(BaseAction):
+class ActionManager(JetbotBaseAction):
     def __init__(self, node):
         super().__init__(node)
         self.actions = {}
