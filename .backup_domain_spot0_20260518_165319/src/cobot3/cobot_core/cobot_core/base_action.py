@@ -11,49 +11,28 @@ ROBOT_BASE_ACTIONS = {
 def _get_robot_type_param(node):
     """Return robot_type parameter value if available, otherwise 'auto'."""
     try:
-        value = node.get_parameter("robot_type").value
-        return str(value).strip().lower()
+        return str(node.get_parameter("robot_type").value).strip().lower()
     except Exception:
         return "auto"
 
 
-def _normalize_robot_type(name: str) -> str:
-    """Map namespace-like names to robot type.
-
-    Examples:
-      spot_0  -> spot
-      spot_12 -> spot
-      spot    -> spot
-      jetbot  -> jetbot
-      jetbot_0 -> jetbot
-    """
-    name = (name or "").strip().strip("/").lower()
-
-    if name.startswith("spot"):
-        return "spot"
-    if name.startswith("jetbot"):
-        return "jetbot"
-
-    return name
-
-
 def infer_robot_type(node):
-    """Infer robot type from parameter first, then namespace.
+    """Infer robot type from ROS parameter first, then namespace.
 
     Priority:
       1. robot_type parameter if not empty and not 'auto'
-      2. namespace prefix: /spot_0 -> spot, /jetbot -> jetbot
+      2. namespace name, e.g. /jetbot or /spot
       3. fallback to spot
     """
     robot_type = _get_robot_type_param(node)
     if robot_type and robot_type != "auto":
-        return _normalize_robot_type(robot_type)
+        return robot_type
 
     namespace = node.get_namespace().strip("/").lower()
     if namespace:
-        return _normalize_robot_type(namespace)
+        return namespace
 
-    return "spot"
+    return "spot"  # default fallback
 
 
 def create_base_action(node):
@@ -72,4 +51,5 @@ def create_base_action(node):
 
 
 # 기존 코드 호환용 alias.
+# 예전 파일이 `from .base_action import BaseAction` 해도 바로 죽지 않게 둠.
 BaseAction = SpotBaseAction

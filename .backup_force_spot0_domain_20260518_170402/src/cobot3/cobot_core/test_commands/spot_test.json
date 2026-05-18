@@ -1,0 +1,4 @@
+{
+  "robot": "spot",
+  "command": "patrol"
+}
