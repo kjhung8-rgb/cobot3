@@ -20,10 +20,6 @@ Cobot3 Spot Extension
 
 import os
 import asyncio
-import os
-import shlex
-import shutil
-import subprocess
 import numpy as np
 import omni
 import omni.ext
@@ -173,7 +169,6 @@ class Cobot3SpotExtension(omni.ext.IExt):
     def on_startup(self, ext_id):
         print("[cobot3.spot] Extension 시작")
         self._sample = None
-        self._teleop_process = None
 
         self._window = ui.Window("Cobot3 Spot - Fire Rescue", width=360, height=320)
         with self._window.frame:
@@ -190,96 +185,17 @@ class Cobot3SpotExtension(omni.ext.IExt):
                 ui.Label("[ 제어 ]", style={"font_size": 12})
                 ui.Button("Reset",           clicked_fn=self._reset)
                 ui.Button("Stop",            clicked_fn=self._stop)
-                ui.Button("🚀 Start Teleop Terminal", clicked_fn=self._start_spot_teleop)
-                ui.Button("🛑 Stop Teleop Terminal",  clicked_fn=self._stop_spot_teleop)
                 ui.Spacer(height=4)
 
                 ui.Label("[ 터미널 명령어 ]", style={"font_size": 12})
-                ui.Label("버튼: Start Teleop Terminal", style={"font_size": 11})
+                ui.Label("python3 tasks/spot_teleop.py", style={"font_size": 11})
                 ui.Label("ros2 run rqt_image_view rqt_image_view", style={"font_size": 11})
 
         print("[cobot3.spot] UI 준비 완료")
 
     def on_shutdown(self):
         print("[cobot3.spot] Extension 종료")
-        self._stop_spot_teleop()
         self._window = None
-
-
-    def _spot_teleop_script_path(self):
-        """현재 extension.py 기준으로 tasks/spot_teleop.py 절대경로 반환"""
-        return os.path.join(os.path.dirname(__file__), "tasks", "spot_teleop.py")
-
-    def _terminal_command(self, bash_cmd):
-        """설치된 터미널 에뮬레이터를 찾아 teleop 실행 명령 생성"""
-        candidates = [
-            ("gnome-terminal", ["gnome-terminal", "--", "bash", "-lc", bash_cmd]),
-            ("terminator",     ["terminator", "-x", "bash", "-lc", bash_cmd]),
-            ("x-terminal-emulator", ["x-terminal-emulator", "-e", "bash", "-lc", bash_cmd]),
-            ("konsole",        ["konsole", "-e", "bash", "-lc", bash_cmd]),
-            ("xterm",          ["xterm", "-e", "bash", "-lc", bash_cmd]),
-        ]
-        for exe, cmd in candidates:
-            if shutil.which(exe):
-                return cmd
-        return None
-
-    def _start_spot_teleop(self):
-        """UI 버튼으로 새 터미널을 열고 spot_teleop.py 실행"""
-        if self._teleop_process is not None and self._teleop_process.poll() is None:
-            print("[cobot3.spot] spot_teleop이 이미 실행 중입니다.")
-            return
-
-        script_path = self._spot_teleop_script_path()
-        if not os.path.exists(script_path):
-            print(f"[cobot3.spot] ❌ spot_teleop.py를 찾을 수 없음: {script_path}")
-            return
-
-        domain_id = os.environ.get("ROS_DOMAIN_ID", "141")
-        python_exe = shutil.which("python3") or "python3"
-
-        # 새 터미널에서 ROS 환경 source 후 실행.
-        # teleop은 stdin을 직접 읽기 때문에 백그라운드가 아니라 터미널 안에서 실행해야 함.
-        bash_cmd = (
-            f"export ROS_DOMAIN_ID={shlex.quote(domain_id)}; "
-            f"source /opt/ros/humble/setup.bash; "
-            f"echo '[cobot3.spot] ROS_DOMAIN_ID='\150; "
-            f"echo '[cobot3.spot] running: {python_exe} {shlex.quote(script_path)}'; "
-            f"{python_exe} {shlex.quote(script_path)}; "
-            f"echo; echo '[cobot3.spot] spot_teleop 종료됨. Enter를 누르면 창이 닫힙니다.'; read"
-        )
-
-        cmd = self._terminal_command(bash_cmd)
-        env = os.environ.copy()
-        env["ROS_DOMAIN_ID"] = domain_id
-
-        try:
-            if cmd is None:
-                print("[cobot3.spot] ⚠️ 사용 가능한 터미널 에뮬레이터를 못 찾음")
-                print(f"[cobot3.spot] 수동 실행: python3 {script_path}")
-                return
-
-            self._teleop_process = subprocess.Popen(cmd, env=env)
-            print(f"[cobot3.spot] ✅ spot_teleop 터미널 실행: {script_path}")
-            print(f"[cobot3.spot] ROS_DOMAIN_ID={domain_id}, topic=/spot_0/cmd_vel")
-        except Exception as e:
-            print(f"[cobot3.spot] ❌ spot_teleop 실행 실패: {e}")
-
-    def _stop_spot_teleop(self):
-        """UI 버튼으로 teleop 터미널 프로세스 종료 시도"""
-        proc = getattr(self, "_teleop_process", None)
-        if proc is None:
-            return
-        if proc.poll() is not None:
-            self._teleop_process = None
-            return
-        try:
-            proc.terminate()
-            print("[cobot3.spot] spot_teleop 종료 요청")
-        except Exception as e:
-            print(f"[cobot3.spot] spot_teleop 종료 실패: {e}")
-        finally:
-            self._teleop_process = None
 
     def _load_scene(self):
         """Spot + Warehouse 로드 (RL 정책 포함)"""
