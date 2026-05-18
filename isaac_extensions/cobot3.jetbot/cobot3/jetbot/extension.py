@@ -33,7 +33,7 @@ class Cobot3JetbotExtension(omni.ext.IExt):
                         ("articulation_controller", "isaacsim.core.nodes.IsaacArticulationController"),
                     ],
                     keys.SET_VALUES: [
-                        ("ros2_context.inputs:domain_id",               int(os.environ.get("ROS_DOMAIN_ID", "0"))),
+                        ("ros2_context.inputs:domain_id",               int(os.environ.get("ROS_DOMAIN_ID", "141"))),
                         ("ros2_subscribe_twist.inputs:topicName",       "/jetbot/cmd_vel"),
                         ("articulation_controller.inputs:targetPrim",   [Sdf.Path(robot_path)]),
                         ("joint_name_array.inputs:arrayType",           "token[]"),
