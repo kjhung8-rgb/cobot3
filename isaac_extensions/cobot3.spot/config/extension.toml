@@ -1,0 +1,21 @@
+[package]
+version = "0.1.0"
+title = "Cobot3 Spot"
+description = "Cobot3 Spot extension for factory fire rescue"
+category = "Sample"
+keywords = ["isaac sim", "spot", "cobot3", "rescue"]
+
+[dependencies]
+"omni.ui" = {}
+"omni.usd" = {}
+"omni.graph" = {}
+"omni.graph.action" = {}
+"omni.graph.nodes" = {}
+"isaacsim.core.api" = {}
+"isaacsim.core.nodes" = {}
+"isaacsim.ros2.bridge" = {}
+"isaacsim.robot.policy.examples" = {}
+"isaacsim.examples.interactive" = {}
+
+[[python.module]]
+name = "cobot3.spot"
