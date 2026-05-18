@@ -1,33 +1,49 @@
-from .base_action import BaseAction
+from .base_action import create_base_action
 from .task.patrol import Patrol
 
 
-class ActionManager(BaseAction):
+class ActionManager:
     def __init__(self, node):
-        super().__init__(node)
+        self.node = node
+        self.base_action = create_base_action(node)
         self.actions = {}
         self._register_actions()
+
+    def __getattr__(self, name):
+        """Delegate unknown methods to selected robot base action.
+
+        예: self.move_forward() -> self.base_action.move_forward()
+        """
+        return getattr(self.base_action, name)
+
+    def _add_action_if_exists(self, name, method_name=None):
+        method_name = method_name or name
+        if hasattr(self.base_action, method_name):
+            self.actions[name] = getattr(self.base_action, method_name)
 
     def _register_actions(self):
         # =========================
         # 저수준 이동 액션
         # =========================
-        self.actions["stop"] = self.stop
+        self._add_action_if_exists("stop")
 
-        self.actions["move_forward"] = self.move_forward
-        self.actions["forward"] = self.move_forward
+        self._add_action_if_exists("move_forward")
+        self._add_action_if_exists("forward", "move_forward")
 
-        self.actions["move_backward"] = self.move_backward
-        self.actions["backward"] = self.move_backward
+        self._add_action_if_exists("move_backward")
+        self._add_action_if_exists("backward", "move_backward")
 
-        self.actions["rotate_left"] = self.rotate_left
-        self.actions["left"] = self.rotate_left
+        self._add_action_if_exists("rotate_left")
+        self._add_action_if_exists("left", "rotate_left")
 
-        self.actions["rotate_right"] = self.rotate_right
-        self.actions["right"] = self.rotate_right
+        self._add_action_if_exists("rotate_right")
+        self._add_action_if_exists("right", "rotate_right")
 
-        if hasattr(self, "wait"):
-            self.actions["wait"] = self.wait
+        self._add_action_if_exists("wait")
+
+        # Spot 등 특정 로봇 전용 액션. 없으면 등록 안 됨.
+        self._add_action_if_exists("stand")
+        self._add_action_if_exists("sit")
 
         # =========================
         # 고수준 task 액션
@@ -35,7 +51,7 @@ class ActionManager(BaseAction):
         self.actions[Patrol.action_name] = Patrol(self).execute
 
     def perform(self, action_name, **kwargs):
-        action_name = action_name.strip()
+        action_name = str(action_name).strip()
 
         if action_name not in self.actions:
             self.node.get_logger().error(

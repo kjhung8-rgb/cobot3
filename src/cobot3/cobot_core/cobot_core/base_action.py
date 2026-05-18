@@ -1,58 +1,55 @@
-# ~/dev_ws/src/artbot_motion/artbot_motion/base_action.py
-
-import time
-from geometry_msgs.msg import Twist
+from .robot.jetbot_base_action import JetbotBaseAction
+from .robot.spot_base_action import SpotBaseAction
 
 
-class BaseAction:
-    def __init__(self, node):
-        self.node = node
-        self.cmd_pub = node.create_publisher(Twist, "cmd_vel", 10)
+ROBOT_BASE_ACTIONS = {
+    "jetbot": JetbotBaseAction,
+    "spot": SpotBaseAction,
+}
 
-    def publish_cmd(self, linear_x=0.0, angular_z=0.0):
-        msg = Twist()
-        msg.linear.x = float(linear_x)
-        msg.angular.z = float(angular_z)
-        self.cmd_pub.publish(msg)
 
-    def stop(self):
-        self.publish_cmd(0.0, 0.0)
-        return True
-    
-    def move_forward(self, speed=0.2, duration=1.0):
-        start = time.time()
+def _get_robot_type_param(node):
+    """Return robot_type parameter value if available, otherwise 'auto'."""
+    try:
+        return str(node.get_parameter("robot_type").value).strip().lower()
+    except Exception:
+        return "auto"
 
-        while time.time() - start < duration:
-            self.publish_cmd(linear_x=speed, angular_z=0.0)
-            time.sleep(0.05)
 
-        self.stop()
-        return True
+def infer_robot_type(node):
+    """Infer robot type from ROS parameter first, then namespace.
 
-    def move_backward(self, speed=0.2, duration=1.0):
-        return self.move_forward(speed=-abs(speed), duration=duration)
+    Priority:
+      1. robot_type parameter if not empty and not 'auto'
+      2. namespace name, e.g. /jetbot or /spot
+      3. fallback to spot
+    """
+    robot_type = _get_robot_type_param(node)
+    if robot_type and robot_type != "auto":
+        return robot_type
 
-    def rotate_left(self, speed=0.6, duration=1.0):
-        start = time.time()
+    namespace = node.get_namespace().strip("/").lower()
+    if namespace:
+        return namespace
 
-        while time.time() - start < duration:
-            self.publish_cmd(linear_x=0.0, angular_z=abs(speed))
-            time.sleep(0.05)
+    return "spot"  # default fallback
 
-        self.stop()
-        return True
 
-    def rotate_right(self, speed=0.6, duration=1.0):
-        start = time.time()
+def create_base_action(node):
+    robot_type = infer_robot_type(node)
+    action_cls = ROBOT_BASE_ACTIONS.get(robot_type)
 
-        while time.time() - start < duration:
-            self.publish_cmd(linear_x=0.0, angular_z=-abs(speed))
-            time.sleep(0.05)
+    if action_cls is None:
+        node.get_logger().warn(
+            f"알 수 없는 robot_type='{robot_type}'. SpotBaseAction으로 fallback"
+        )
+        action_cls = SpotBaseAction
+        robot_type = "spot"
 
-        self.stop()
-        return True
+    node.get_logger().info(f"🤖 Selected robot base action: {robot_type}")
+    return action_cls(node)
 
-    def wait(self, duration=1.0):
-        self.stop()
-        time.sleep(duration)
-        return True
+
+# 기존 코드 호환용 alias.
+# 예전 파일이 `from .base_action import BaseAction` 해도 바로 죽지 않게 둠.
+BaseAction = SpotBaseAction
