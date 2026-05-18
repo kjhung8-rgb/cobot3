@@ -11,7 +11,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "robot_name",
-            default_value="jetbot",
+            default_value="spot",
             description="Robot namespace name. Example: jetbot, spot",
         ),
         DeclareLaunchArgument(

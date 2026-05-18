@@ -22,7 +22,7 @@ def infer_robot_type(node):
     Priority:
       1. robot_type parameter if not empty and not 'auto'
       2. namespace name, e.g. /jetbot or /spot
-      3. fallback to jetbot
+      3. fallback to spot
     """
     robot_type = _get_robot_type_param(node)
     if robot_type and robot_type != "auto":
@@ -32,7 +32,7 @@ def infer_robot_type(node):
     if namespace:
         return namespace
 
-    return "jetbot"
+    return "spot"  # default fallback
 
 
 def create_base_action(node):
@@ -41,10 +41,10 @@ def create_base_action(node):
 
     if action_cls is None:
         node.get_logger().warn(
-            f"알 수 없는 robot_type='{robot_type}'. JetbotBaseAction으로 fallback"
+            f"알 수 없는 robot_type='{robot_type}'. SpotBaseAction으로 fallback"
         )
-        action_cls = JetbotBaseAction
-        robot_type = "jetbot"
+        action_cls = SpotBaseAction
+        robot_type = "spot"
 
     node.get_logger().info(f"🤖 Selected robot base action: {robot_type}")
     return action_cls(node)
@@ -52,4 +52,4 @@ def create_base_action(node):
 
 # 기존 코드 호환용 alias.
 # 예전 파일이 `from .base_action import BaseAction` 해도 바로 죽지 않게 둠.
-BaseAction = JetbotBaseAction
+BaseAction = SpotBaseAction
