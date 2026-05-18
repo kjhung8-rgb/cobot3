@@ -239,7 +239,7 @@ class Cobot3SpotExtension(omni.ext.IExt):
                         ("ros2_subscribe_twist", "isaacsim.ros2.bridge.ROS2SubscribeTwist"),
                     ],
                     keys.SET_VALUES: [
-                        ("ros2_context.inputs:domain_id",         int(os.environ.get("ROS_DOMAIN_ID", "0"))),
+                        ("ros2_context.inputs:domain_id",         int(os.environ.get("ROS_DOMAIN_ID", "141"))),
                         ("ros2_subscribe_twist.inputs:topicName", "/spot_0/cmd_vel"),
                     ],
                     keys.CONNECT: [

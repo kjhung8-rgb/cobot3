@@ -38,13 +38,6 @@ def _normalize_robot_type(name: str) -> str:
 
 
 def infer_robot_type(node):
-    """Infer robot type from parameter first, then namespace.
-
-    Priority:
-      1. robot_type parameter if not empty and not 'auto'
-      2. namespace prefix: /spot_0 -> spot, /jetbot -> jetbot
-      3. fallback to spot
-    """
     robot_type = _get_robot_type_param(node)
     if robot_type and robot_type != "auto":
         return _normalize_robot_type(robot_type)
