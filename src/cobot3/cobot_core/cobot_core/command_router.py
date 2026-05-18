@@ -13,13 +13,16 @@ class CommandRouter(Node):
 
     Input JSON example:
         {"robot": "jetbot", "command": "move_forward"}
+        {"robot": "spot", "command": "patrol"}
+        {"robot": "spot", "command": "move_forward", "params": {"speed": 0.2, "duration": 1.0}}
 
     Output topic:
         /{robot}/action_command
 
     Output message:
-        std_msgs/String with only the command name, because action_node currently
-        expects a plain command string such as "move_forward".
+        std_msgs/String.
+        - params가 없으면 기존 호환을 위해 command 문자열만 전송
+        - params가 있으면 JSON 문자열로 전송
     """
 
     def __init__(self):
@@ -78,6 +81,8 @@ class CommandRouter(Node):
             data.get("command") or data.get("action") or ""
         ).strip()
 
+        params = data.get("params") or {}
+
         if not robot_name:
             self.get_logger().warn(f"robot 값이 비어있음: {data}")
             return
@@ -86,20 +91,25 @@ class CommandRouter(Node):
             self.get_logger().warn(f"command/action 값이 비어있음: {data}")
             return
 
+        if not isinstance(params, dict):
+            self.get_logger().warn(f"params는 dict여야 함: {params}")
+            return
+
         topic, publisher = self._get_publisher(robot_name)
 
         out = String()
-        out.data = command
+        if params:
+            out.data = json.dumps(
+                {"command": command, "params": params},
+                ensure_ascii=False,
+            )
+        else:
+            out.data = command
+
         publisher.publish(out)
 
-        if "params" in data:
-            self.get_logger().info(
-                "params 필드는 현재 라우팅만 하고 action_node에는 전달하지 않음 "
-                f"params={data['params']}"
-            )
-
         self.get_logger().info(
-            f"🚦 Routed: {self.input_topic} -> {topic} / command={command}"
+            f"🚦 Routed: {self.input_topic} -> {topic} / command={command}, params={params}"
         )
 
 

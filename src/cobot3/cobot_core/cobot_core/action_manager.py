@@ -1,12 +1,44 @@
-from .base_action import JetbotBaseAction
+from .base_action import create_base_action
 from .task.patrol import Patrol
 
 
-class ActionManager(JetbotBaseAction):
+class ActionManager:
+    """고수준 action/task를 등록하고 실행하는 공통 매니저.
+
+    로봇별 저수준 동작은 self.base_action에 위임한다.
+    따라서 Patrol 같은 task 파일은 JetBot/Spot 구분 없이
+    manager.move_forward(), manager.rotate_left() 같은 공통 메서드만 호출하면 된다.
+    """
+
     def __init__(self, node):
-        super().__init__(node)
+        self.node = node
+        self.base_action = create_base_action(node)
         self.actions = {}
         self._register_actions()
+
+    # =========================
+    # 로봇별 저수준 액션 위임
+    # =========================
+    def stop(self, **kwargs):
+        return self.base_action.stop(**kwargs)
+
+    def move_forward(self, **kwargs):
+        return self.base_action.move_forward(**kwargs)
+
+    def move_backward(self, **kwargs):
+        return self.base_action.move_backward(**kwargs)
+
+    def rotate_left(self, **kwargs):
+        return self.base_action.rotate_left(**kwargs)
+
+    def rotate_right(self, **kwargs):
+        return self.base_action.rotate_right(**kwargs)
+
+    def wait(self, **kwargs):
+        return self.base_action.wait(**kwargs)
+
+    def publish_cmd(self, **kwargs):
+        return self.base_action.publish_cmd(**kwargs)
 
     def _register_actions(self):
         # =========================
@@ -26,8 +58,7 @@ class ActionManager(JetbotBaseAction):
         self.actions["rotate_right"] = self.rotate_right
         self.actions["right"] = self.rotate_right
 
-        if hasattr(self, "wait"):
-            self.actions["wait"] = self.wait
+        self.actions["wait"] = self.wait
 
         # =========================
         # 고수준 task 액션
