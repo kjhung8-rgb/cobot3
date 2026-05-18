@@ -11,6 +11,8 @@ class ActionNode(Node):
     def __init__(self):
         super().__init__("action_node")
 
+        # robot_type은 launch에서 auto/jetbot/spot으로 넘길 수 있다.
+        # auto면 namespace(/jetbot, /spot)를 보고 ActionManager가 자동 선택한다.
         self.declare_parameter("robot_type", "auto")
 
         self.manager = ActionManager(self)
@@ -27,35 +29,6 @@ class ActionNode(Node):
             f"📡 Namespace: {self.get_namespace()} / Subscribed: action_command"
         )
 
-    def _parse_command(self, raw: str):
-        """Accept either plain command or JSON payload.
-
-        Plain:
-          move_forward
-
-        JSON:
-          {"command": "move_forward", "params": {"duration": 1.0}}
-        """
-        raw = raw.strip()
-        if not raw:
-            return "", {}
-
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return raw, {}
-
-        if not isinstance(data, dict):
-            return raw, {}
-
-        command = str(data.get("command") or data.get("action") or "").strip()
-        params = data.get("params") or {}
-        if not isinstance(params, dict):
-            self.get_logger().warn(f"params가 dict가 아님. 무시함: {params}")
-            params = {}
-
-        return command, params
-
     def command_callback(self, msg):
         raw = msg.data.strip()
 
@@ -63,10 +36,22 @@ class ActionNode(Node):
             self.get_logger().warn("빈 명령 수신")
             return
 
-        command, params = self._parse_command(raw)
+        command = raw
+        params = {}
+
+        # 기존 호환: "move_forward" 같은 순수 문자열도 그대로 지원.
+        # 확장 호환: {"command": "move_forward", "params": {...}} 도 지원.
+        if raw.startswith("{"):
+            try:
+                data = json.loads(raw)
+                command = str(data.get("command") or data.get("action") or "").strip()
+                params = data.get("params") or {}
+            except json.JSONDecodeError as exc:
+                self.get_logger().warn(f"JSON 명령 파싱 실패: {exc} / raw={raw}")
+                return
 
         if not command:
-            self.get_logger().warn(f"명령 파싱 실패: {raw}")
+            self.get_logger().warn(f"명령 이름이 비어있음: {raw}")
             return
 
         self.get_logger().info(f"명령 수신: {command}, params={params}")

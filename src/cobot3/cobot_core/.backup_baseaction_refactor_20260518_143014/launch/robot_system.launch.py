@@ -6,18 +6,12 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     robot_name = LaunchConfiguration("robot_name")
-    robot_type = LaunchConfiguration("robot_type")
 
     return LaunchDescription([
         DeclareLaunchArgument(
             "robot_name",
-            default_value="spot",
-            description="Robot namespace name. Example: jetbot, spot",
-        ),
-        DeclareLaunchArgument(
-            "robot_type",
-            default_value="auto",
-            description="BaseAction type. auto uses namespace. Example: jetbot, spot",
+            default_value="jetbot",
+            description="Robot namespace name. Example: jetbot, carter, turtlebot",
         ),
 
         Node(
@@ -33,8 +27,5 @@ def generate_launch_description():
             name="action_node",
             namespace=robot_name,
             output="screen",
-            parameters=[
-                {"robot_type": robot_type},
-            ],
         ),
     ])
