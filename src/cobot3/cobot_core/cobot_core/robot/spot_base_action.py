@@ -10,7 +10,7 @@ class SpotBaseAction(MobileBaseAction):
     나중에 실제 Spot SDK를 붙이면 이 파일 내부 구현만 교체하면 된다.
     """
 
-    robot_type = "spot"
+    robot_type = "spot_0"
     default_linear_speed = 0.25
     default_angular_speed = 0.5
 

@@ -11,13 +11,13 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "robot_name",
-            default_value="spot_0",
-            description="Robot namespace name. Example: spot_0, spot_1, jetbot",
+            default_value="spot",
+            description="Robot namespace name. Example: jetbot, spot",
         ),
         DeclareLaunchArgument(
             "robot_type",
             default_value="auto",
-            description="BaseAction type. auto uses namespace prefix. Example: spot, jetbot",
+            description="BaseAction type. auto uses namespace. Example: jetbot, spot",
         ),
 
         Node(
@@ -25,9 +25,6 @@ def generate_launch_description():
             executable="command_router",
             name="command_router",
             output="screen",
-            parameters=[
-                {"default_robot": robot_name},
-            ],
         ),
 
         Node(
