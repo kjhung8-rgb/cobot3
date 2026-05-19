@@ -13,6 +13,9 @@ from launch_ros.actions import Node
 
 def _resolve_map_yaml():
     share = get_package_share_directory("cobot3_navigation")
+    local = os.path.join(share, "maps", "spot0_map.yaml")
+    if os.path.isfile(local):
+        return local
     local = os.path.join(share, "maps", "carter_warehouse_navigation.yaml")
     if os.path.isfile(local):
         return local
@@ -37,7 +40,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "map",
                 default_value=default_map,
-                description="Full path to map YAML (Carter warehouse, same as Nav2 example).",
+                description="Full path to map YAML (defaults to the saved Spot map).",
             ),
             DeclareLaunchArgument(
                 "params_file",
