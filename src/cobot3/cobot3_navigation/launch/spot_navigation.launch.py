@@ -5,6 +5,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
+from launch.actions import TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -45,8 +46,23 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "use_sim_time",
-                default_value="true",
-                description="Use /clock from Isaac Sim when true.",
+                default_value="false",
+                description=(
+                    "Use /clock when true. The cobot3 Spot Isaac extension "
+                    "publishes sensor and odom stamps with system time."
+                ),
+            ),
+            Node(
+                package="cobot_core",
+                executable="scan_sanitizer",
+                name="spot_nav_scan_sanitizer",
+                output="screen",
+                parameters=[
+                    {"use_sim_time": use_sim_time},
+                    {"input_scan_topic": "/spot_0/scan"},
+                    {"output_scan_topic": "/spot_0/scan_nav"},
+                    {"frame_id": "spot_0/lidar_link"},
+                ],
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
@@ -58,6 +74,7 @@ def generate_launch_description():
                     "use_sim_time": use_sim_time,
                     "params_file": params_file,
                     "autostart": "true",
+                    "use_composition": "False",
                 }.items(),
             ),
             IncludeLaunchDescription(
@@ -83,12 +100,17 @@ def generate_launch_description():
                 output="screen",
                 parameters=[{"use_sim_time": use_sim_time}],
             ),
-            Node(
-                package="cobot3_navigation",
-                executable="publish_isaac_spawn_pose.py",
-                name="spot_initial_pose",
-                output="screen",
-                parameters=[{"use_sim_time": use_sim_time}],
+            TimerAction(
+                period=5.0,
+                actions=[
+                    Node(
+                        package="cobot3_navigation",
+                        executable="publish_isaac_spawn_pose.py",
+                        name="spot_initial_pose",
+                        output="screen",
+                        parameters=[{"use_sim_time": use_sim_time}],
+                    ),
+                ],
             ),
         ]
     )

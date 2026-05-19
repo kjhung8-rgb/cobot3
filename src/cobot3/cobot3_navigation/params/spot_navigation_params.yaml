@@ -6,7 +6,7 @@ amcl:
     alpha3: 0.2
     alpha4: 0.2
     alpha5: 0.2
-    base_frame_id: "body"
+    base_frame_id: "spot_0/base_link"
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
@@ -37,7 +37,7 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: /spot_0/lidar/scan
+    scan_topic: /spot_0/scan_nav
     map_topic: map
     # Pose comes from ~/.cobot3/spot_spawn_pose.json via publish_isaac_spawn_pose.py (Isaac Load Scene).
     set_initial_pose: false
@@ -55,8 +55,8 @@ bt_navigator:
   ros__parameters:
     use_sim_time: True
     global_frame: map
-    robot_base_frame: body
-    odom_topic: /spot_0/odometry
+    robot_base_frame: spot_0/base_link
+    odom_topic: /spot_0/odom
     bt_loop_duration: 20
     default_server_timeout: 40
     # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
@@ -117,13 +117,13 @@ velocity_smoother:
     smoothing_frequency: 20.0 
     scale_velocities: false 
     feedback: "OPEN_LOOP" 
-    max_velocity: [0.35, 0.0, 0.45] 
-    min_velocity: [-0.35, 0.0, -0.45] 
-    # deadband_velocity: [0.0, 0.0, 0.0] 
+    max_velocity: [0.50, 0.25, 0.60] 
+    min_velocity: [-0.30, -0.25, -0.60] 
+    deadband_velocity: [0.0, 0.0, 0.0] 
     velocity_timeout: 1.0 
-    # max_accel: [1.0, 0.0, 1.25] 
-    # max_decel: [-1.0, 0.0, -1.25] 
-    odom_topic: "/spot_0/odometry" 
+    max_accel: [1.0, 0.6, 1.2] 
+    max_decel: [-1.0, -0.6, -1.2] 
+    odom_topic: "/spot_0/odom" 
     odom_duration: 0.1
 
 controller_server:
@@ -135,7 +135,7 @@ controller_server:
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugin: ["stopped_goal_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
 
     # Progress checker parameters
@@ -144,51 +144,106 @@ controller_server:
       required_movement_radius: 0.25
       movement_time_allowance: 15.0
     # Goal checker parameters
-    stopped_goal_checker:
-      plugin: "nav2_controller::StoppedGoalChecker"
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
       stateful: True
-    # DWB parameters
+    # MPPI follows the Spot Isaac driver pattern, adapted to this extension's
+    # /spot_0 frame and topic contract.
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: True
-      min_vel_x: 0.0
-      min_vel_y: 0.0
-      max_vel_x: 0.35
-      max_vel_y: 0.0
-      max_vel_theta: 0.45
-      min_speed_xy: 0.0
-      max_speed_xy: 1.0
-      min_speed_theta: 0.0
-      acc_lim_x: 1.2
-      acc_lim_y: 0.0
-      acc_lim_theta: 2.0
-      decel_lim_x: -1.2
-      decel_lim_y: 0.0
-      decel_lim_theta: -2.0
-      vx_samples: 20
-      vy_samples: 5
-      vtheta_samples: 20
-      sim_time: 1.7
-      linear_granularity: 0.05
-      angular_granularity: 0.025
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 56
+      model_dt: 0.05
+      batch_size: 1800
+      vx_std: 0.20
+      vy_std: 0.15
+      wz_std: 0.30
+      vx_max: 0.50
+      vx_min: -0.30
+      vy_max: 0.25
+      wz_max: 0.60
+      ax_max: 1.0
+      ax_min: -1.0
+      ay_max: 0.6
+      ay_min: -0.6
+      az_max: 1.2
+      iteration_count: 1
+      prune_distance: 1.7
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.25
-      short_circuit_trajectory_evaluation: True
-      stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
-      PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 8.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "Omni"
+      visualize: true
+      regenerate_noises: true
+      critics:
+        [
+          "ConstraintCritic",
+          "CostCritic",
+          "GoalCritic",
+          "GoalAngleCritic",
+          "PathAlignCritic",
+          "PathFollowCritic",
+          "PathAngleCritic",
+          "PreferForwardCritic",
+          "TwirlingCritic",
+        ]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        near_collision_cost: 253
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
+      TwirlingCritic:
+        enabled: true
+        twirling_cost_power: 1
+        twirling_cost_weight: 8.0
 
 controller_server_rclcpp_node:
   ros__parameters:
@@ -201,7 +256,7 @@ local_costmap:
       publish_frequency: 2.0
       footprint_padding: 0.25
       global_frame: odom
-      robot_base_frame: body
+      robot_base_frame: spot_0/base_link
       use_sim_time: True
       rolling_window: True
       width: 10
@@ -220,7 +275,7 @@ local_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /spot_0/lidar/scan
+          topic: /spot_0/scan_nav
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -245,7 +300,7 @@ global_costmap:
       update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: map
-      robot_base_frame: body
+      robot_base_frame: spot_0/base_link
       use_sim_time: True
       footprint: "[[0.32, 0.22], [0.32, -0.22], [-0.32, -0.22], [-0.32, 0.22]]"
       # rolling_window: True
@@ -260,7 +315,7 @@ global_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /spot_0/lidar/scan
+          topic: /spot_0/scan_nav
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -337,7 +392,7 @@ behavior_server:
     wait:
       plugin: "nav2_behaviors/Wait"
     global_frame: odom
-    robot_base_frame: body
+    robot_base_frame: spot_0/base_link
     transform_tolerance: 0.2
     use_sim_time: true
     simulate_ahead_time: 2.0
@@ -359,4 +414,3 @@ waypoint_follower:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"
       enabled: True
       waypoint_pause_duration: 200
-

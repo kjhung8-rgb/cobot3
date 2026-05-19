@@ -16,11 +16,20 @@ class PublishAnymalSpawnPose(Node):
         super().__init__("anymal_initial_pose")
         self._pub = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self._done = False
-        self.create_timer(1.0, self._try_publish)
+        self._publish_count = 0
+        self._max_publish_count = 10
+        self._warned_no_subscriber = False
+        self.create_timer(0.5, self._try_publish)
 
     def _try_publish(self):
         if self._done:
             return
+        if self._pub.get_subscription_count() == 0:
+            if not self._warned_no_subscriber:
+                self.get_logger().info("Waiting for /initialpose subscriber")
+                self._warned_no_subscriber = True
+            return
+
         if not os.path.isfile(POSE_FILE):
             # Fallback: publish at origin (ANYmal spawns at [0, 0] in warehouse)
             self._publish_at(0.0, 0.0, 0.0)
@@ -41,10 +50,14 @@ class PublishAnymalSpawnPose(Node):
         msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.06853891909122467
         self._pub.publish(msg)
-        self._done = True
-        self.get_logger().info(
-            f"Published /initialpose: x={x:.2f} y={y:.2f} yaw={yaw:.2f}"
-        )
+        self._publish_count += 1
+        if self._publish_count == 1:
+            self.get_logger().info(
+                f"Publishing /initialpose: x={x:.2f} y={y:.2f} yaw={yaw:.2f}"
+            )
+        if self._publish_count >= self._max_publish_count:
+            self._done = True
+            self.get_logger().info("Finished initial pose burst")
 
 
 def main():

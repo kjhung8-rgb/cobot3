@@ -11,6 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
+from launch.actions import TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -55,8 +56,25 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "use_sim_time",
-                default_value="true",
-                description="Use /clock from Isaac Sim when true.",
+                default_value="false",
+                description=(
+                    "Use /clock when true. The cobot3 ANYmal Isaac extension "
+                    "publishes sensor and odom stamps with system time."
+                ),
+            ),
+            # Isaac RTX LaserScan can contain invalid ranges and an infinite
+            # time_increment. Sanitize it before AMCL and Nav2 costmaps consume it.
+            Node(
+                package="cobot_core",
+                executable="scan_sanitizer",
+                name="anymal_nav_scan_sanitizer",
+                output="screen",
+                parameters=[
+                    {"use_sim_time": use_sim_time},
+                    {"input_scan_topic": "/anymal_0/scan"},
+                    {"output_scan_topic": "/anymal_0/scan_nav"},
+                    {"frame_id": "anymal_0/lidar_link"},
+                ],
             ),
             # Nav2 full stack (map_server, AMCL, planner, controller, costmaps, …)
             IncludeLaunchDescription(
@@ -69,6 +87,7 @@ def generate_launch_description():
                     "use_sim_time": use_sim_time,
                     "params_file": params_file,
                     "autostart": "true",
+                    "use_composition": "False",
                 }.items(),
             ),
             # RViz2 with Nav2 plugin
@@ -97,13 +116,19 @@ def generate_launch_description():
                 output="screen",
                 parameters=[{"use_sim_time": use_sim_time}],
             ),
-            # Publish /initialpose from ~/.cobot3/anymal_spawn_pose.json (or origin)
-            Node(
-                package="cobot3_navigation",
-                executable="publish_anymal_spawn_pose.py",
-                name="anymal_initial_pose",
-                output="screen",
-                parameters=[{"use_sim_time": use_sim_time}],
+            # Publish /initialpose after AMCL is up so map->odom is not left at
+            # the bootstrap identity transform.
+            TimerAction(
+                period=5.0,
+                actions=[
+                    Node(
+                        package="cobot3_navigation",
+                        executable="publish_anymal_spawn_pose.py",
+                        name="anymal_initial_pose",
+                        output="screen",
+                        parameters=[{"use_sim_time": use_sim_time}],
+                    ),
+                ],
             ),
         ]
     )
