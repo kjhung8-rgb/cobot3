@@ -59,7 +59,7 @@ class Cobot3SpotExtension(omni.ext.IExt):
                 ui.Button("Stop Teleop Terminal", clicked_fn=self._stop_teleop)
                 ui.Button("Reset", clicked_fn=self._reset)
                 ui.Button("Stop Timeline", clicked_fn=self._stop)
-                ui.Spacer(height=4)
+                ui.Spacer(height=-0.4)
 
                 ui.Label("[ 주요 토픽 ]", style={"font_size": 12})
                 ui.Label(CMD_VEL_TOPIC, style={"font_size": 11})
