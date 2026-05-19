@@ -32,7 +32,6 @@ setup(
             'action_node = cobot_core.action_node:main',
             'command_router = cobot_core.command_router:main',
             'send_json_command = cobot_core.send_json_command:main',
-                    'scan_sanitizer = cobot_core.scan_sanitizer:main',
         ],
     }
 )
