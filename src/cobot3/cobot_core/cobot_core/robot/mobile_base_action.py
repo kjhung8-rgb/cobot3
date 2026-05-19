@@ -1,3 +1,5 @@
+import time
+
 from geometry_msgs.msg import Twist
 
 
@@ -26,13 +28,31 @@ class MobileBaseAction:
             f"✅ {self.__class__.__name__} ready / publish: {self.cmd_vel_topic}"
         )
 
-    def publish_cmd(self, linear_x=0.0, angular_z=0.0):
+    def publish_cmd(self, linear_x=0.0, angular_z=0.0, linear_y=0.0):
         msg = Twist()
         msg.linear.x = float(linear_x)
-        msg.linear.y = 0.0
+        msg.linear.y = float(linear_y)
         msg.linear.z = 0.0
         msg.angular.x = 0.0
         msg.angular.y = 0.0
         msg.angular.z = float(angular_z)
         self.cmd_pub.publish(msg)
+        return True
+
+    def run_cmd_for_duration(
+        self,
+        linear_x=0.0,
+        linear_y=0.0,
+        angular_z=0.0,
+        duration=None,
+    ):
+        if duration is None:
+            return self.publish_cmd(linear_x, angular_z, linear_y)
+
+        end_time = time.time() + float(duration)
+        while time.time() < end_time:
+            self.publish_cmd(linear_x, angular_z, linear_y)
+            time.sleep(0.05)
+
+        self.stop()
         return True
