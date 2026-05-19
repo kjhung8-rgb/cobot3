@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Publish /initialpose from pose written by cobot3.anymal Load Scene."""
+import json
+import math
+import os
+
+import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from rclpy.node import Node
+
+POSE_FILE = os.path.expanduser("~/.cobot3/anymal_spawn_pose.json")
+
+
+class PublishAnymalSpawnPose(Node):
+    def __init__(self):
+        super().__init__("anymal_initial_pose")
+        self._pub = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        self._done = False
+        self.create_timer(1.0, self._try_publish)
+
+    def _try_publish(self):
+        if self._done:
+            return
+        if not os.path.isfile(POSE_FILE):
+            # Fallback: publish at origin (ANYmal spawns at [0, 0] in warehouse)
+            self._publish_at(0.0, 0.0, 0.0)
+            return
+        with open(POSE_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+        self._publish_at(float(data["x"]), float(data["y"]), float(data["yaw"]))
+
+    def _publish_at(self, x: float, y: float, yaw: float):
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.z = math.sin(yaw * 0.5)
+        msg.pose.pose.orientation.w = math.cos(yaw * 0.5)
+        msg.pose.covariance[0] = 0.25
+        msg.pose.covariance[7] = 0.25
+        msg.pose.covariance[35] = 0.06853891909122467
+        self._pub.publish(msg)
+        self._done = True
+        self.get_logger().info(
+            f"Published /initialpose: x={x:.2f} y={y:.2f} yaw={yaw:.2f}"
+        )
+
+
+def main():
+    rclpy.init()
+    node = PublishAnymalSpawnPose()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
