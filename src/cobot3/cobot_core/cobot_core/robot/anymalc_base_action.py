@@ -1,5 +1,5 @@
 class AnymalCBaseAction(MobileBaseAction):
-    robot_type = "anymalc"
+    robot_type = "anymalc_0"
 
     default_linear_speed = 0.25
     default_lateral_speed = 0.15

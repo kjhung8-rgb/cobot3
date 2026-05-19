@@ -9,7 +9,7 @@ class MobileBaseAction:
     """
 
     robot_type = "mobile"
-    default_namespace = "spot_0"
+    default_namespace = "anymalc_0"
 
     def __init__(self, node):
         self.node = node
