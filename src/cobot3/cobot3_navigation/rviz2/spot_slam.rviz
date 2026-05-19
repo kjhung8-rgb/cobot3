@@ -12,7 +12,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/LaserScan
       Name: LaserScan
       Topic:
-        Value: /spot_0/lidar/scan
+        Value: /spot_0/scan_slam
         Depth: 5
     - Class: rviz_default_plugins/Map
       Name: Map
@@ -23,7 +23,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Odometry
       Name: Odometry
       Topic:
-        Value: /spot_0/odometry
+        Value: /spot_0/odom
         Depth: 5
   Global Options:
     Fixed Frame: map

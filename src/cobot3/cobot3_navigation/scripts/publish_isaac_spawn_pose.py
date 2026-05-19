@@ -31,15 +31,20 @@ class PublishIsaacSpawnPose(Node):
             return
 
         if not os.path.isfile(POSE_FILE):
+            # Fallback for maps saved from this launch flow: slam_toolbox starts
+            # the map frame at the robot's initial pose.
+            self._publish_at(0.0, 0.0, 0.0)
             return
         with open(POSE_FILE, encoding="utf-8") as handle:
             data = json.load(handle)
-        yaw = float(data["yaw"])
+        self._publish_at(float(data["x"]), float(data["y"]), float(data["yaw"]))
+
+    def _publish_at(self, x: float, y: float, yaw: float):
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = "map"
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.pose.pose.position.x = float(data["x"])
-        msg.pose.pose.position.y = float(data["y"])
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
         msg.pose.pose.orientation.z = math.sin(yaw * 0.5)
         msg.pose.pose.orientation.w = math.cos(yaw * 0.5)
         msg.pose.covariance[0] = 0.25
@@ -49,8 +54,7 @@ class PublishIsaacSpawnPose(Node):
         self._publish_count += 1
         if self._publish_count == 1:
             self.get_logger().info(
-                f"Publishing /initialpose from Isaac spawn file: "
-                f"x={data['x']:.2f} y={data['y']:.2f} yaw={yaw:.2f}"
+                f"Publishing /initialpose: x={x:.2f} y={y:.2f} yaw={yaw:.2f}"
             )
         if self._publish_count >= self._max_publish_count:
             self._done = True
