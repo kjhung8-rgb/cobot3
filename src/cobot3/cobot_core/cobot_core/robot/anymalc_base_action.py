@@ -1,3 +1,6 @@
+from .mobile_base_action import MobileBaseAction
+
+
 class AnymalCBaseAction(MobileBaseAction):
     robot_type = "anymalc_0"
 
