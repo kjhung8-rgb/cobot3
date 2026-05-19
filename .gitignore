@@ -35,3 +35,6 @@ src/cobot3/cobot_core/test_commands/*.json
 *~
 *.orig
 *.rej
+
+# maps 폴더
+maps/

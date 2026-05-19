@@ -199,7 +199,7 @@ def _ensure_lidar_prim():
         try:
             omni.kit.commands.execute(
                 "IsaacSensorCreateRtxLidar",
-                translation=Gf.Vec3d(0.25, 0.0, 0.35),
+                translation=Gf.Vec3d(0.25, 0.0, -0.4),      # translation 값
                 orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
                 visibility=True,
                 **kwargs,
