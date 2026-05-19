@@ -14,6 +14,7 @@ keywords = ["isaac sim", "spot", "cobot3", "rescue"]
 "isaacsim.core.api" = {}
 "isaacsim.core.nodes" = {}
 "isaacsim.ros2.bridge" = {}
+"isaacsim.sensors.rtx" = {}
 "isaacsim.robot.policy.examples" = {}
 "isaacsim.examples.interactive" = {}
 

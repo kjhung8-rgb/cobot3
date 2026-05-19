@@ -25,3 +25,16 @@ Thumbs.db
 
 # Json 테스트 파일
 src/cobot3/cobot_core/test_commands/*.json
+
+
+# Backup 파일
+# Backup files / folders
+.backup_*/
+*.bak
+*.backup
+*~
+*.orig
+*.rej
+
+# maps 폴더
+maps/
