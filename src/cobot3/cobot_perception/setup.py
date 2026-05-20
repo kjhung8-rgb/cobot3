@@ -26,7 +26,6 @@ setup(
     entry_points={
         'console_scripts': [
             'survivor_detector = cobot_perception.survivor_detector:main',
-            'survivor_pose_mock = cobot_perception.survivor_pose_mock:main',
             'survivor_pose_to_marker = cobot_perception.survivor_pose_to_marker:main',
             'rotate_on_arrival = cobot_perception.rotate_on_arrival:main',
             'camera_coverage_tracker = cobot_perception.camera_coverage_tracker:main',
