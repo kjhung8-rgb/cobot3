@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import omni
@@ -22,6 +23,10 @@ from .constants import (
     SPOT_SPAWN_POSITION,
     SPOT_SPAWN_YAW_DEG,
 )
+
+
+SPOT_EXTENSION_DIR = Path(__file__).resolve().parents[2]
+WAREHOUSE_USD_PATH = SPOT_EXTENSION_DIR / "usd" / "sujung_warehouse.usd"
 
 
 def _yaw_to_quat_wxyz(yaw_deg):
@@ -70,7 +75,7 @@ class SpotFireRescue(BaseSample):
         )
 
         add_reference_to_stage(
-            usd_path="/home/katze/dev_ws/cobot3/isaac_extensions/cobot3.spot/usd/sujung_warehouse.usd",
+            usd_path=str(WAREHOUSE_USD_PATH),
             prim_path="/World/Warehouse",
         )
         print("[cobot3.spot] Warehouse 로드 완료")

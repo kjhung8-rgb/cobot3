@@ -9,7 +9,7 @@ from launch_ros.actions import Node
 
 PERCEPTION_VENV_PYTHON = os.environ.get(
     "COBOT_PERCEPTION_PYTHON",
-    "/home/katze/dev_ws/venv/perception/bin/python",
+    os.path.expanduser("~/dev_ws/venv/perception/bin/python"),
 )
 
 
