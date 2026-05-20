@@ -140,7 +140,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: Survivor goal (mock /detected_survivor_pose)
+      Name: Survivor goal (PoseStamped /detected_survivor_pose)
       Namespaces: {}
       Topic:
         Depth: 5
