@@ -31,7 +31,7 @@ class CommandRouter(Node):
 
         self.default_robot = self.declare_parameter(
             "default_robot",
-            "spot_0",
+            "anymalc_0",
         ).get_parameter_value().string_value
 
         self._router_publishers = {}
