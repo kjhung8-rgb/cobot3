@@ -9,7 +9,6 @@ import omni.usd
 from pxr import Gf, UsdGeom
 
 from isaacsim.examples.interactive.base_sample import BaseSample
-from isaacsim.core.utils.nucleus import get_assets_root_path
 from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.robot.policy.examples.robots import SpotFlatTerrainPolicy
 
@@ -56,9 +55,8 @@ class SpotFireRescue(BaseSample):
             restitution=0.01,
         )
 
-        assets_root = get_assets_root_path()
         add_reference_to_stage(
-            usd_path=assets_root + "/Isaac/Environments/Simple_Warehouse/full_warehouse.usd",
+            usd_path="/home/rokey/dev_ws/cobot3/isaac_extensions/cobot3.spot/usd/sujung_warehouse.usd",
             prim_path="/World/Warehouse",
         )
         print("[cobot3.spot] Warehouse 로드 완료")
