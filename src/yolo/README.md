@@ -11,11 +11,13 @@ Isaac Sim에서 Spot 로봇 카메라로 사람을 감지하고 3D 공간 좌표
 | `spot_people_demo2.py` | Spot 카메라로 사람 YOLO 감지 (좌표 출력 없음) |
 | `spot_people_depth.py` | 사람 감지 + **Isaac Sim 월드 좌표** (x, y, z) 출력 |
 | `spot_people_depth2.py` | 사람 감지 + **Spot 기준 상대 좌표** (x, y, z) 출력 |
+| `spot_people_crowd.py` | **8명 군중** 감지, 더 멀리서, 다양한 방향/포즈, AnimGraph 시도 |
 
 ### 좌표 기준 차이
 
 - **`spot_people_depth.py`** : Isaac Sim 씬 원점 `(0, 0, 0)` 기준 절대 좌표
 - **`spot_people_depth2.py`** : Spot 로봇 몸통 위치 기준 상대 좌표
+- **`spot_people_crowd.py`** : 절대 좌표 출력, Spot을 뒤로 이동해 5~8m 거리에서 감지
 
 ---
 
@@ -26,11 +28,14 @@ cd /home/kim/dev_ws/cobot3/src/yolo
 ```
 
 ```bash
-# 월드 좌표 버전
+# 월드 좌표 버전 (4명, 근거리)
 /home/kim/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/python.sh spot_people_depth.py
 
 # Spot 상대 좌표 버전
 /home/kim/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/python.sh spot_people_depth2.py
+
+# 군중 버전 (8명, 원거리, 다양한 포즈)
+/home/kim/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/python.sh spot_people_crowd.py
 ```
 
 ### launch 파일로 실행
@@ -38,6 +43,7 @@ cd /home/kim/dev_ws/cobot3/src/yolo
 ```bash
 ros2 launch src/yolo/launch/spot_people_depth.launch.py
 ros2 launch src/yolo/launch/spot_people_depth2.launch.py
+ros2 launch src/yolo/launch/spot_people_crowd.launch.py
 ```
 
 ---
