@@ -82,6 +82,16 @@ def generate_launch_description():
                         output="screen",
                         parameters=[slam_params, {"use_sim_time": use_sim_time}],
                     ),
+                    # Camera coverage tracker: must come up before Nav2 so
+                    # /map_explorable exists when global_costmap.static_layer
+                    # tries to subscribe.
+                    Node(
+                        package="cobot_perception",
+                        executable="camera_coverage_tracker",
+                        name="camera_coverage_tracker",
+                        output="screen",
+                        parameters=[{"use_sim_time": use_sim_time}],
+                    ),
                 ],
             ),
             TimerAction(
@@ -105,6 +115,11 @@ def generate_launch_description():
                 executable="cmd_vel_relay.py",
                 name="cmd_vel_relay",
                 output="screen",
+                parameters=[
+                    {"enable_person_dampening": True},
+                    {"dampening_factor": 0.3},
+                    {"dampening_hold_sec": 2.0},
+                ],
             ),
             TimerAction(
                 period=8.0,
@@ -125,6 +140,20 @@ def generate_launch_description():
                 output="screen",
                 prefix=PERCEPTION_VENV_PYTHON,
                 parameters=[detector_params, {"model_path": yolo_model}],
+            ),
+            # Spin 360 after every explore goal so the narrow front camera FOV
+            # gets a chance to see what 360-deg LiDAR already mapped through.
+            TimerAction(
+                period=10.0,
+                actions=[
+                    Node(
+                        package="cobot_perception",
+                        executable="rotate_on_arrival",
+                        name="rotate_on_arrival",
+                        output="screen",
+                        parameters=[{"use_sim_time": use_sim_time}],
+                    ),
+                ],
             ),
             Node(
                 package="rviz2",
