@@ -61,10 +61,14 @@ class SpotFireRescue(BaseSample):
         )
         print("[cobot3.spot] Warehouse 로드 완료")
 
+        # Spawn at the warehouse entrance facing the interior (-Y direction).
+        # Z is set well above floor (~0.53 in sujung_warehouse) so physics
+        # drops Spot onto the floor cleanly.
         self.spot = SpotFlatTerrainPolicy(
             prim_path=SPOT_PRIM_PATH,
             name="Spot",
-            position=np.array([0, 0, 0.8]),
+            position=np.array([23.058, 30.566, 1.0]),
+            orientation=np.array([0.7071, 0.0, 0.0, -0.7071]),
         )
         print("[cobot3.spot] Spot RL 정책 로드 완료")
 
@@ -90,7 +94,10 @@ class SpotFireRescue(BaseSample):
             xform = UsdGeom.Xformable(cam_prim)
             xform.ClearXformOpOrder()
             xform.AddTranslateOp().Set(Gf.Vec3d(0.5, 0.0, 0.3))
-            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+            # USD cameras look down their -Z by default. Rotate to point along
+            # the body's +X (forward) with a slight downward tilt so both
+            # standing survivors and ones on the floor are visible.
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, -80.0, 0.0))
             print("[cobot3.spot] 전방 카메라 추가 완료")
         else:
             print("[cobot3.spot] 전방 카메라 이미 존재")

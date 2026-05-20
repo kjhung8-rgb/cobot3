@@ -7,6 +7,7 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import Bool
 
 from ultralytics import YOLO
 
@@ -21,6 +22,7 @@ class SurvivorDetector(Node):
         self.declare_parameter('model_path', 'yolov8n.pt')
         self.declare_parameter('image_topic', '/spot_0/front_cam/color_image')
         self.declare_parameter('annotated_topic', '/spot_0/yolo/annotated_image')
+        self.declare_parameter('detected_topic', '/spot_0/yolo/person_detected')
         self.declare_parameter('confidence_threshold', 0.4)
         self.declare_parameter('device', 'cuda')
         self.declare_parameter('person_only', True)
@@ -28,6 +30,7 @@ class SurvivorDetector(Node):
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
         image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         annotated_topic = self.get_parameter('annotated_topic').get_parameter_value().string_value
+        detected_topic = self.get_parameter('detected_topic').get_parameter_value().string_value
         self.conf_thresh = self.get_parameter('confidence_threshold').get_parameter_value().double_value
         self.device = self.get_parameter('device').get_parameter_value().string_value
         self.person_only = self.get_parameter('person_only').get_parameter_value().bool_value
@@ -49,6 +52,7 @@ class SurvivorDetector(Node):
 
         self.sub = self.create_subscription(Image, image_topic, self._on_image, sensor_qos)
         self.pub_image = self.create_publisher(Image, annotated_topic, 10)
+        self.pub_detected = self.create_publisher(Bool, detected_topic, 10)
 
         self._frame_count = 0
         self.get_logger().info(
@@ -78,10 +82,14 @@ class SurvivorDetector(Node):
         out_msg.header = msg.header
         self.pub_image.publish(out_msg)
 
+        n_detections = 0 if result.boxes is None else len(result.boxes)
+        det_msg = Bool()
+        det_msg.data = n_detections > 0
+        self.pub_detected.publish(det_msg)
+
         self._frame_count += 1
         if self._frame_count % 30 == 0:
-            n = 0 if result.boxes is None else len(result.boxes)
-            self.get_logger().info(f'frame {self._frame_count}: {n} survivor(s)')
+            self.get_logger().info(f'frame {self._frame_count}: {n_detections} survivor(s)')
 
 
 def main(args=None):
