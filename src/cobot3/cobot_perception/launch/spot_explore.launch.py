@@ -82,6 +82,16 @@ def generate_launch_description():
                         output="screen",
                         parameters=[slam_params, {"use_sim_time": use_sim_time}],
                     ),
+                    # Camera coverage tracker: must come up before Nav2 so
+                    # /map_explorable exists when global_costmap.static_layer
+                    # tries to subscribe.
+                    Node(
+                        package="cobot_perception",
+                        executable="camera_coverage_tracker",
+                        name="camera_coverage_tracker",
+                        output="screen",
+                        parameters=[{"use_sim_time": use_sim_time}],
+                    ),
                 ],
             ),
             TimerAction(
