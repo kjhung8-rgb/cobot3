@@ -7,7 +7,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 
 
-PERCEPTION_VENV_PYTHON = "/home/rokey/dev_ws/venv/perception/bin/python"
+PERCEPTION_VENV_PYTHON = "/home/katze/dev_ws/venv/perception/bin/python"
 
 
 def generate_launch_description():

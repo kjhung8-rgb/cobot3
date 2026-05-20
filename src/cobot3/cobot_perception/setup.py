@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'survivor_detector = cobot_perception.survivor_detector:main',
+            'survivor_pose_mock = cobot_perception.survivor_pose_mock:main',
         ],
     },
 )
