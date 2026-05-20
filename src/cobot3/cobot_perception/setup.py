@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'survivor_detector = cobot_perception.survivor_detector:main',
+            'rotate_on_arrival = cobot_perception.rotate_on_arrival:main',
         ],
     },
 )
