@@ -75,6 +75,9 @@ class SpotFireRescue(BaseSample):
         )
         print("[cobot3.spot] Warehouse 로드 완료")
 
+        # Spawn at the warehouse entrance facing the interior (-Y direction).
+        # Z is set well above floor (~0.53 in sujung_warehouse) so physics
+        # drops Spot onto the floor cleanly.
         self.spot = SpotFlatTerrainPolicy(
             prim_path=SPOT_PRIM_PATH,
             name="Spot",
@@ -101,15 +104,11 @@ class SpotFireRescue(BaseSample):
                 prim_type="Camera",
                 prim_path=FRONT_CAMERA_PRIM_PATH,
             )
-            created = True
-
-        cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
-        xform = UsdGeom.Xformable(cam_prim)
-        xform.ClearXformOpOrder()
-        xform.AddTranslateOp().Set(Gf.Vec3d(*FRONT_CAMERA_TRANSLATION))
-        xform.AddRotateXYZOp().Set(Gf.Vec3f(*FRONT_CAMERA_ROTATION_XYZ_DEG))
-
-        if created:
+            cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
+            xform = UsdGeom.Xformable(cam_prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.5, 0.0, 0.3))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
             print("[cobot3.spot] 전방 카메라 추가 완료")
         else:
             print("[cobot3.spot] 전방 카메라 pose 업데이트 완료")
