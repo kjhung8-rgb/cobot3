@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import omni
 import omni.timeline
@@ -12,7 +14,19 @@ from isaacsim.examples.interactive.base_sample import BaseSample
 from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.robot.policy.examples.robots import SpotFlatTerrainPolicy
 
-from .constants import FRONT_CAMERA_PRIM_PATH, SPOT_BODY_PRIM_PATH, SPOT_PRIM_PATH
+from .constants import (
+    FRONT_CAMERA_PRIM_PATH,
+    FRONT_CAMERA_ROTATION_XYZ_DEG,
+    FRONT_CAMERA_TRANSLATION,
+    SPOT_PRIM_PATH,
+    SPOT_SPAWN_POSITION,
+    SPOT_SPAWN_YAW_DEG,
+)
+
+
+def _yaw_to_quat_wxyz(yaw_deg):
+    half_yaw = math.radians(yaw_deg) * 0.5
+    return np.array([math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw)], dtype=np.float64)
 
 
 class SpotFireRescue(BaseSample):
@@ -64,7 +78,7 @@ class SpotFireRescue(BaseSample):
         self.spot = SpotFlatTerrainPolicy(
             prim_path=SPOT_PRIM_PATH,
             name="Spot",
-            position=np.array([0, 0, 0.8]),
+            position=np.array(SPOT_SPAWN_POSITION, dtype=np.float64),
         )
         print("[cobot3.spot] Spot RL 정책 로드 완료")
 
@@ -80,20 +94,25 @@ class SpotFireRescue(BaseSample):
         import omni.kit.commands
 
         stage = omni.usd.get_context().get_stage()
+        created = False
         if not stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH).IsValid():
             omni.kit.commands.execute(
                 "CreatePrimWithDefaultXform",
                 prim_type="Camera",
                 prim_path=FRONT_CAMERA_PRIM_PATH,
             )
-            cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
-            xform = UsdGeom.Xformable(cam_prim)
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(0.5, 0.0, 0.3))
-            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+            created = True
+
+        cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
+        xform = UsdGeom.Xformable(cam_prim)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(*FRONT_CAMERA_TRANSLATION))
+        xform.AddRotateXYZOp().Set(Gf.Vec3f(*FRONT_CAMERA_ROTATION_XYZ_DEG))
+
+        if created:
             print("[cobot3.spot] 전방 카메라 추가 완료")
         else:
-            print("[cobot3.spot] 전방 카메라 이미 존재")
+            print("[cobot3.spot] 전방 카메라 pose 업데이트 완료")
 
     async def setup_post_load(self):
         self._physics_ready = False
@@ -129,6 +148,10 @@ class SpotFireRescue(BaseSample):
             self._physics_ready = True
             self.spot.initialize()
             self.spot.post_reset()
+            self.spot.robot.set_world_pose(
+                position=np.array(SPOT_SPAWN_POSITION, dtype=np.float64),
+                orientation=_yaw_to_quat_wxyz(SPOT_SPAWN_YAW_DEG),
+            )
             self.spot.robot.set_joints_default_state(self.spot.default_pos)
 
     def _on_timeline_play(self, event):

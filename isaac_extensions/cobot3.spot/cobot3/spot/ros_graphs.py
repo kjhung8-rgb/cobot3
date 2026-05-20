@@ -11,6 +11,7 @@ Important:
 
 from __future__ import annotations
 
+import math
 import traceback
 
 import numpy as np
@@ -28,6 +29,8 @@ from .constants import (
     DEPTH_IMAGE_TOPIC,
     FRONT_CAM_FRAME,
     FRONT_CAMERA_PRIM_PATH,
+    FRONT_CAMERA_ROTATION_XYZ_DEG,
+    FRONT_CAMERA_TRANSLATION,
     LIDAR_FRAME,
     LIDAR_PRIM_PATH,
     ODOM_FRAME,
@@ -185,6 +188,23 @@ def setup_camera_graph(sample):
 LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, 0.35)
 LIDAR_ORIENTATION = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
 LIDAR_TF_ROTATION_XYZW = [0.0, 0.0, 0.0, 1.0]
+
+
+def _euler_xyz_deg_to_quat_xyzw(rotation_xyz_deg):
+    roll, pitch, yaw = [math.radians(value) for value in rotation_xyz_deg]
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+
+    return [
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    ]
 
 
 def _set_lidar_transform(stage):
@@ -353,8 +373,8 @@ def setup_slam_sensors(sample):
                     ("PublishCameraStaticTf.inputs:staticPublisher", True),
                     ("PublishCameraStaticTf.inputs:parentFrameId", BASE_LINK_FRAME),
                     ("PublishCameraStaticTf.inputs:childFrameId", FRONT_CAM_FRAME),
-                    ("PublishCameraStaticTf.inputs:translation", [0.5, 0.0, 0.3]),
-                    ("PublishCameraStaticTf.inputs:rotation", [0.0, 0.0, 0.0, 1.0]),
+                    ("PublishCameraStaticTf.inputs:translation", list(FRONT_CAMERA_TRANSLATION)),
+                    ("PublishCameraStaticTf.inputs:rotation", _euler_xyz_deg_to_quat_xyzw(FRONT_CAMERA_ROTATION_XYZ_DEG)),
                 ],
             },
         )
