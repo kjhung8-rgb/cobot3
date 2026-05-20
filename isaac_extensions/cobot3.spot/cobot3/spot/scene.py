@@ -104,11 +104,15 @@ class SpotFireRescue(BaseSample):
                 prim_type="Camera",
                 prim_path=FRONT_CAMERA_PRIM_PATH,
             )
-            cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
-            xform = UsdGeom.Xformable(cam_prim)
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(0.5, 0.0, 0.3))
-            xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+            created = True
+
+        cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
+        xform = UsdGeom.Xformable(cam_prim)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(*FRONT_CAMERA_TRANSLATION))
+        xform.AddRotateXYZOp().Set(Gf.Vec3f(*FRONT_CAMERA_ROTATION_XYZ_DEG))
+
+        if created:
             print("[cobot3.spot] 전방 카메라 추가 완료")
         else:
             print("[cobot3.spot] 전방 카메라 pose 업데이트 완료")
