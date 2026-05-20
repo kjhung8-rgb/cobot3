@@ -8,4 +8,5 @@ survivor_pose_to_marker:
     marker_z_lift: 0.15
     line_width: 0.12
     sphere_diameter: 0.4
+    accumulate_markers: true
     log_each_pose: true
