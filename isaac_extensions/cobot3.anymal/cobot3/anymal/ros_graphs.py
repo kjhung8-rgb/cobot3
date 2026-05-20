@@ -1,12 +1,8 @@
-"""ROS2 OmniGraph setup helpers for the Cobot3 Spot extension.
+"""ROS2 OmniGraph setup helpers for the Cobot3 ANYmal C extension.
 
 Important:
     Do NOT import rclpy inside Isaac Sim extension code.
-    Isaac Sim 5.x runs its own Python, and ROS Humble apt rclpy is usually
-    built for system Python 3.10. Importing it from Isaac's Python can cause
-    `No module named rclpy._rclpy_pybind11`.
-
-    This module uses Isaac Sim ROS2 OmniGraph bridge nodes only.
+    Use Isaac Sim ROS2 OmniGraph bridge nodes only.
 """
 
 from __future__ import annotations
@@ -16,9 +12,11 @@ import traceback
 import numpy as np
 import omni.graph.core as og
 import omni.usd
-from pxr import Gf, UsdGeom
+from pxr import Gf
 
 from .constants import (
+    ANYMAL_PRIM_PATH,
+    ODOMETRY_CHASSIS_PRIM_PATH,
     BASE_LINK_FRAME,
     CAMERA_GRAPH_PATH,
     CAMERA_INFO_TOPIC,
@@ -34,18 +32,30 @@ from .constants import (
     ODOM_TOPIC,
     SCAN_TOPIC,
     SLAM_GRAPH_PATH,
-    SPOT_PRIM_PATH,
+    VX_MAX,
+    VX_MIN,
+    VY_MAX,
+    VY_MIN,
+    WZ_MAX,
+    WZ_MIN,
 )
 from .utils import get_ros_domain_id
 
 
 # ─────────────────────────────────────────────
-# /spot_0/cmd_vel subscriber
+# /anymal_0/cmd_vel subscriber
 # ─────────────────────────────────────────────
 def setup_cmd_vel_graph(sample):
-    """Subscribe /spot_0/cmd_vel and update sample._base_command."""
+    """Subscribe /anymal_0/cmd_vel and update sample._base_command.
+
+    ANYmal C policy base_command = [forward, lateral, yaw].
+    No × 2.0 scale (unlike Spot) — ANYmal policy uses 1.0 as unit command
+    which roughly maps to ~0.5 m/s forward in real units.
+    Nav2 velocity limits in anymal_navigation_params.yaml are set conservatively
+    to avoid sending commands the policy cannot track stably.
+    """
     if sample is None:
-        print("[cobot3.spot] Load Scene 먼저 클릭하세요!")
+        print("[cobot3.anymal] Load Scene 먼저 클릭하세요!")
         return
 
     graph_path = CMD_VEL_GRAPH_PATH
@@ -86,15 +96,13 @@ def setup_cmd_vel_graph(sample):
                 if lin_vel is None or ang_vel is None:
                     return
 
-                lin_x = float(lin_vel[0])
-                lin_y = float(lin_vel[1])
-                ang_z = float(ang_vel[2])
+                vx = float(np.clip(lin_vel[0], VX_MIN, VX_MAX))
+                vy = float(np.clip(lin_vel[1], VY_MIN, VY_MAX))
+                wz = float(np.clip(ang_vel[2], WZ_MIN, WZ_MAX))
 
-                # Spot policy command: [forward, lateral, yaw]
-                sample._base_command = np.array(
-                    [lin_x * 2.0, lin_y * 2.0, ang_z * 2.0],
-                    dtype=np.float32,
-                )
+                # ANYmal policy command: [forward, lateral, yaw]
+                # No extra scaling needed — policy handles 0~1 commands naturally.
+                sample._base_command = np.array([vx, vy, wz], dtype=np.float32)
             except Exception:
                 pass
 
@@ -104,10 +112,11 @@ def setup_cmd_vel_graph(sample):
                 world.remove_physics_callback("ros2_cmd_callback")
             world.add_physics_callback("ros2_cmd_callback", ros2_cmd_callback)
 
-        print("[cobot3.spot] ✅ ROS2 cmd_vel 구독 시작")
-        print(f"[cobot3.spot]   domain_id={domain_id}, topic={CMD_VEL_TOPIC}")
+        print("[cobot3.anymal] ✅ ROS2 cmd_vel 구독 시작")
+        print(f"[cobot3.anymal]   domain_id={domain_id}, topic={CMD_VEL_TOPIC}")
+        print(f"[cobot3.anymal]   vx=[{VX_MIN},{VX_MAX}]  vy=[{VY_MIN},{VY_MAX}]  wz=[{WZ_MIN},{WZ_MAX}]")
     except Exception as exc:
-        print(f"[cobot3.spot] ❌ ROS2 cmd_vel graph 생성 실패: {exc}")
+        print(f"[cobot3.anymal] ❌ ROS2 cmd_vel graph 생성 실패: {exc}")
         traceback.print_exc()
 
 
@@ -115,9 +124,9 @@ def setup_cmd_vel_graph(sample):
 # Camera publishers
 # ─────────────────────────────────────────────
 def setup_camera_graph(sample):
-    """Publish RGB/depth/camera_info under /spot_0/front_cam/*."""
+    """Publish RGB/depth/camera_info under /anymal_0/front_cam/*."""
     if sample is None:
-        print("[cobot3.spot] Load Scene 먼저 클릭하세요!")
+        print("[cobot3.anymal] Load Scene 먼저 클릭하세요!")
         return
 
     graph_path = CAMERA_GRAPH_PATH
@@ -138,8 +147,6 @@ def setup_camera_graph(sample):
                     ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
                     ("CameraHelperRgb", "isaacsim.ros2.bridge.ROS2CameraHelper"),
                     ("CameraHelperDepth", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-                    # camera_info는 ROS2CameraHelper type='camera_info'가 아니라
-                    # 전용 ROS2CameraInfoHelper를 써야 한다.
                     ("CameraInfoHelper", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
                 ],
                 keys.CONNECT: [
@@ -169,55 +176,45 @@ def setup_camera_graph(sample):
                 ],
             },
         )
-        print("[cobot3.spot] ✅ Camera graph 생성")
-        print(f"[cobot3.spot]   {COLOR_IMAGE_TOPIC}")
-        print(f"[cobot3.spot]   {DEPTH_IMAGE_TOPIC}")
-        print(f"[cobot3.spot]   {CAMERA_INFO_TOPIC}")
-        print(f"[cobot3.spot]   frame_id={FRONT_CAM_FRAME}")
+        print("[cobot3.anymal] ✅ Camera graph 생성")
+        print(f"[cobot3.anymal]   {COLOR_IMAGE_TOPIC}")
+        print(f"[cobot3.anymal]   {DEPTH_IMAGE_TOPIC}")
+        print(f"[cobot3.anymal]   {CAMERA_INFO_TOPIC}")
     except Exception as exc:
-        print(f"[cobot3.spot] ❌ Camera graph 생성 실패: {exc}")
+        print(f"[cobot3.anymal] ❌ Camera graph 생성 실패: {exc}")
         traceback.print_exc()
 
 
 # ─────────────────────────────────────────────
 # LiDAR helper
 # ─────────────────────────────────────────────
-LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, 0.35)
-LIDAR_ORIENTATION = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
-LIDAR_TF_ROTATION_XYZW = [0.0, 0.0, 0.0, 1.0]
-
-
-def _set_lidar_transform(stage):
-    lidar_prim = stage.GetPrimAtPath(LIDAR_PRIM_PATH)
-    if not lidar_prim.IsValid():
-        return
-
-    xform = UsdGeom.Xformable(lidar_prim)
-    xform.ClearXformOpOrder()
-    xform.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(LIDAR_TRANSLATION)
-    xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(LIDAR_ORIENTATION)
-
-
 def _ensure_lidar_prim():
     import omni.kit.commands
 
     stage = omni.usd.get_context().get_stage()
     if stage.GetPrimAtPath(LIDAR_PRIM_PATH).IsValid():
-        _set_lidar_transform(stage)
         return
+
+    # ANYmal C body prim: AnymalFlatTerrainPolicy uses "base" as the body prim name.
+    # Mount LiDAR on top of the body at roughly +0.2 m above body center.
+    parent_path = "/World/Anymal/base"
+    if not stage.GetPrimAtPath(parent_path).IsValid():
+        # Fallback: try root-level ANYMAL prim name (some Isaac Sim versions)
+        parent_path = ANYMAL_PRIM_PATH
 
     created = False
     for kwargs in [
-        dict(path="spot_lidar", parent="/World/Spot/body", config="Example_Rotary_2D"),
+        dict(path="anymal_lidar", parent=parent_path, config="Example_Rotary_2D"),
         dict(path=LIDAR_PRIM_PATH, parent=None, config="Example_Rotary_2D"),
-        dict(path="spot_lidar", parent="/World/Spot/body", config="Example Rotary 2D"),
+        dict(path="anymal_lidar", parent=parent_path, config="Example Rotary 2D"),
         dict(path=LIDAR_PRIM_PATH, parent=None, config="Example Rotary 2D"),
     ]:
         try:
             omni.kit.commands.execute(
                 "IsaacSensorCreateRtxLidar",
-                translation=LIDAR_TRANSLATION,
-                orientation=LIDAR_ORIENTATION,
+                # Place on top of ANYmal C body; body is ~0.3m above base_link
+                translation=Gf.Vec3d(0.0, 0.0, 0.3),
+                orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
                 visibility=True,
                 **kwargs,
             )
@@ -228,20 +225,18 @@ def _ensure_lidar_prim():
 
     if not created:
         raise RuntimeError(
-            "RTX LiDAR 생성 실패. Create > Sensors > RTX Lidar > NVIDIA > Example Rotary 2D로 "
-            f"수동 생성 후 prim을 {LIDAR_PRIM_PATH} 위치로 맞춰줘."
+            "RTX LiDAR 생성 실패. Isaac Sim GUI에서 Create > Sensors > RTX Lidar > "
+            f"NVIDIA > Example Rotary 2D로 수동 생성 후 {LIDAR_PRIM_PATH} 위치로 맞춰줘."
         )
-
-    _set_lidar_transform(stage)
 
 
 # ─────────────────────────────────────────────
 # LiDAR + odom + tf graph
 # ─────────────────────────────────────────────
 def setup_slam_sensors(sample):
-    """Create /spot_0/scan, /spot_0/odom and TF graph without importing rclpy."""
+    """Create /anymal_0/scan, /anymal_0/odom and TF graph without importing rclpy."""
     if sample is None:
-        print("[cobot3.spot] Load Scene 먼저 클릭하세요!")
+        print("[cobot3.anymal] Load Scene 먼저 클릭하세요!")
         return
 
     domain_id = get_ros_domain_id()
@@ -249,9 +244,9 @@ def setup_slam_sensors(sample):
 
     try:
         _ensure_lidar_prim()
-        print(f"[cobot3.spot] ✅ LiDAR prim 준비: {LIDAR_PRIM_PATH}")
+        print(f"[cobot3.anymal] ✅ LiDAR prim 준비: {LIDAR_PRIM_PATH}")
     except Exception as exc:
-        print(f"[cobot3.spot] ❌ LiDAR prim 생성 실패: {exc}")
+        print(f"[cobot3.anymal] ❌ LiDAR prim 생성 실패: {exc}")
         traceback.print_exc()
         return
 
@@ -276,13 +271,13 @@ def setup_slam_sensors(sample):
                     ("ComputeOdometry", "isaacsim.core.nodes.IsaacComputeOdometry"),
                     ("PublishOdometry", "isaacsim.ros2.bridge.ROS2PublishOdometry"),
 
-                    # TF: odom -> base_link, base_link -> sensors
+                    # TF: odom -> base_link, base_link -> sensors (static)
                     ("PublishOdomTf", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
                     ("PublishLidarStaticTf", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
                     ("PublishCameraStaticTf", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
                 ],
                 keys.CONNECT: [
-                    # Execution
+                    # Execution chain
                     ("OnPlaybackTick.outputs:tick", "CreateLidarRenderProduct.inputs:execIn"),
                     ("OnPlaybackTick.outputs:tick", "ComputeOdometry.inputs:execIn"),
                     ("ComputeOdometry.outputs:execOut", "PublishOdometry.inputs:execIn"),
@@ -313,7 +308,7 @@ def setup_slam_sensors(sample):
                     ("ComputeOdometry.outputs:linearVelocity", "PublishOdometry.inputs:linearVelocity"),
                     ("ComputeOdometry.outputs:angularVelocity", "PublishOdometry.inputs:angularVelocity"),
 
-                    # Dynamic TF odom -> base_link
+                    # Dynamic TF: odom -> anymal_0/base_link
                     ("ComputeOdometry.outputs:position", "PublishOdomTf.inputs:translation"),
                     ("ComputeOdometry.outputs:orientation", "PublishOdomTf.inputs:rotation"),
                 ],
@@ -328,43 +323,44 @@ def setup_slam_sensors(sample):
                     ("LidarHelper.inputs:type", "laser_scan"),
                     ("LidarHelper.inputs:useSystemTime", True),
 
-                    # Odom
-                    ("ComputeOdometry.inputs:chassisPrim", [SPOT_PRIM_PATH]),
+                    # Odom: ArticulationRoot is at /World/Anymal/base for anymal_c.usd
+                    ("ComputeOdometry.inputs:chassisPrim", [ODOMETRY_CHASSIS_PRIM_PATH]),
                     ("PublishOdometry.inputs:topicName", ODOM_TOPIC),
                     ("PublishOdometry.inputs:odomFrameId", ODOM_FRAME),
                     ("PublishOdometry.inputs:chassisFrameId", BASE_LINK_FRAME),
                     ("PublishOdometry.inputs:publishRawVelocities", True),
 
-                    # /tf: odom -> spot_0/base_link
+                    # /tf: odom -> anymal_0/base_link
                     ("PublishOdomTf.inputs:topicName", "/tf"),
                     ("PublishOdomTf.inputs:parentFrameId", ODOM_FRAME),
                     ("PublishOdomTf.inputs:childFrameId", BASE_LINK_FRAME),
 
-                    # /tf_static: spot_0/base_link -> spot_0/lidar_link
+                    # /tf_static: anymal_0/base_link -> anymal_0/lidar_link
+                    # LiDAR is mounted on top of ANYmal body (~0.3 m above base_link)
                     ("PublishLidarStaticTf.inputs:topicName", "/tf_static"),
                     ("PublishLidarStaticTf.inputs:staticPublisher", True),
                     ("PublishLidarStaticTf.inputs:parentFrameId", BASE_LINK_FRAME),
                     ("PublishLidarStaticTf.inputs:childFrameId", LIDAR_FRAME),
-                    ("PublishLidarStaticTf.inputs:translation", list(LIDAR_TRANSLATION)),
-                    ("PublishLidarStaticTf.inputs:rotation", LIDAR_TF_ROTATION_XYZW),
+                    ("PublishLidarStaticTf.inputs:translation", [0.0, 0.0, 0.3]),
+                    ("PublishLidarStaticTf.inputs:rotation", [0.0, 0.0, 0.0, 1.0]),
 
-                    # /tf_static: spot_0/base_link -> spot_0/front_cam_link
+                    # /tf_static: anymal_0/base_link -> anymal_0/front_cam_link
                     ("PublishCameraStaticTf.inputs:topicName", "/tf_static"),
                     ("PublishCameraStaticTf.inputs:staticPublisher", True),
                     ("PublishCameraStaticTf.inputs:parentFrameId", BASE_LINK_FRAME),
                     ("PublishCameraStaticTf.inputs:childFrameId", FRONT_CAM_FRAME),
-                    ("PublishCameraStaticTf.inputs:translation", [0.5, 0.0, 0.3]),
+                    ("PublishCameraStaticTf.inputs:translation", [0.4, 0.0, 0.15]),
                     ("PublishCameraStaticTf.inputs:rotation", [0.0, 0.0, 0.0, 1.0]),
                 ],
             },
         )
 
-        print("[cobot3.spot] ✅ SLAM sensors graph 생성 완료 - no rclpy")
-        print(f"[cobot3.spot]   {SCAN_TOPIC}: frame_id={LIDAR_FRAME}")
-        print(f"[cobot3.spot]   {ODOM_TOPIC}: frame_id={ODOM_FRAME}, child_frame_id={BASE_LINK_FRAME}")
-        print(f"[cobot3.spot]   /tf: {ODOM_FRAME} -> {BASE_LINK_FRAME}")
-        print(f"[cobot3.spot]   /tf_static: {BASE_LINK_FRAME} -> {LIDAR_FRAME}")
-        print(f"[cobot3.spot]   /tf_static: {BASE_LINK_FRAME} -> {FRONT_CAM_FRAME}")
+        print("[cobot3.anymal] ✅ SLAM sensors graph 생성 완료 - no rclpy")
+        print(f"[cobot3.anymal]   {SCAN_TOPIC}: frame_id={LIDAR_FRAME}")
+        print(f"[cobot3.anymal]   {ODOM_TOPIC}: frame_id={ODOM_FRAME}, child_frame_id={BASE_LINK_FRAME}")
+        print(f"[cobot3.anymal]   /tf: {ODOM_FRAME} -> {BASE_LINK_FRAME}")
+        print(f"[cobot3.anymal]   /tf_static: {BASE_LINK_FRAME} -> {LIDAR_FRAME}")
+        print(f"[cobot3.anymal]   /tf_static: {BASE_LINK_FRAME} -> {FRONT_CAM_FRAME}")
     except Exception as exc:
-        print(f"[cobot3.spot] ❌ SLAM sensors graph 생성 실패: {exc}")
+        print(f"[cobot3.anymal] ❌ SLAM sensors graph 생성 실패: {exc}")
         traceback.print_exc()

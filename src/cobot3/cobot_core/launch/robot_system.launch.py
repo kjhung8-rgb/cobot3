@@ -11,12 +11,12 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "robot_name",
-            default_value="spot_0",
+            default_value="anymalc_0",
             description="Robot namespace name. Example: spot_0, spot_1, jetbot",
         ),
         DeclareLaunchArgument(
             "robot_type",
-            default_value="auto",
+            default_value="anymalc",
             description="BaseAction type. auto uses namespace prefix. Example: spot, jetbot",
         ),
 
