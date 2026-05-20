@@ -70,7 +70,7 @@ class SpotFireRescue(BaseSample):
         )
 
         add_reference_to_stage(
-            usd_path="/home/rokey/dev_ws/cobot3/isaac_extensions/cobot3.spot/usd/sujung_warehouse.usd",
+            usd_path="/home/katze/dev_ws/cobot3/isaac_extensions/cobot3.spot/usd/sujung_warehouse.usd",
             prim_path="/World/Warehouse",
         )
         print("[cobot3.spot] Warehouse 로드 완료")
