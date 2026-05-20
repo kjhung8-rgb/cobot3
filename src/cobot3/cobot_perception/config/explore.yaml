@@ -1,0 +1,15 @@
+explore:
+  ros__parameters:
+    robot_base_frame: spot_0/base_link
+    costmap_topic: /global_costmap/costmap
+    costmap_updates_topic: /global_costmap/costmap_updates
+    visualize: true
+    planner_frequency: 0.33
+    progress_timeout: 30.0
+    potential_scale: 3.0
+    orientation_scale: 0.0
+    gain_scale: 1.0
+    transform_tolerance: 0.5
+    # Smaller frontiers (~4 cells at 0.05m res) so the robot bothers to enter
+    # narrow rooms/corners that a camera-narrow FOV would otherwise miss.
+    min_frontier_size: 0.2
