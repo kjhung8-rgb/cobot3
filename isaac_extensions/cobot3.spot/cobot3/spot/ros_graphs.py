@@ -16,7 +16,7 @@ import traceback
 import numpy as np
 import omni.graph.core as og
 import omni.usd
-from pxr import Gf
+from pxr import Gf, UsdGeom
 
 from .constants import (
     BASE_LINK_FRAME,
@@ -182,11 +182,28 @@ def setup_camera_graph(sample):
 # ─────────────────────────────────────────────
 # LiDAR helper
 # ─────────────────────────────────────────────
+LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, 0.35)
+LIDAR_ORIENTATION = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
+LIDAR_TF_ROTATION_XYZW = [0.0, 0.0, 0.0, 1.0]
+
+
+def _set_lidar_transform(stage):
+    lidar_prim = stage.GetPrimAtPath(LIDAR_PRIM_PATH)
+    if not lidar_prim.IsValid():
+        return
+
+    xform = UsdGeom.Xformable(lidar_prim)
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(LIDAR_TRANSLATION)
+    xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(LIDAR_ORIENTATION)
+
+
 def _ensure_lidar_prim():
     import omni.kit.commands
 
     stage = omni.usd.get_context().get_stage()
     if stage.GetPrimAtPath(LIDAR_PRIM_PATH).IsValid():
+        _set_lidar_transform(stage)
         return
 
     created = False
@@ -199,8 +216,8 @@ def _ensure_lidar_prim():
         try:
             omni.kit.commands.execute(
                 "IsaacSensorCreateRtxLidar",
-                translation=Gf.Vec3d(0.25, 0.0, -0.4),      # translation 값
-                orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
+                translation=LIDAR_TRANSLATION,
+                orientation=LIDAR_ORIENTATION,
                 visibility=True,
                 **kwargs,
             )
@@ -214,6 +231,8 @@ def _ensure_lidar_prim():
             "RTX LiDAR 생성 실패. Create > Sensors > RTX Lidar > NVIDIA > Example Rotary 2D로 "
             f"수동 생성 후 prim을 {LIDAR_PRIM_PATH} 위치로 맞춰줘."
         )
+
+    _set_lidar_transform(stage)
 
 
 # ─────────────────────────────────────────────
@@ -326,8 +345,8 @@ def setup_slam_sensors(sample):
                     ("PublishLidarStaticTf.inputs:staticPublisher", True),
                     ("PublishLidarStaticTf.inputs:parentFrameId", BASE_LINK_FRAME),
                     ("PublishLidarStaticTf.inputs:childFrameId", LIDAR_FRAME),
-                    ("PublishLidarStaticTf.inputs:translation", [0.25, 0.0, 0.35]),
-                    ("PublishLidarStaticTf.inputs:rotation", [0.0, 0.0, 0.0, 1.0]),
+                    ("PublishLidarStaticTf.inputs:translation", list(LIDAR_TRANSLATION)),
+                    ("PublishLidarStaticTf.inputs:rotation", LIDAR_TF_ROTATION_XYZW),
 
                     # /tf_static: spot_0/base_link -> spot_0/front_cam_link
                     ("PublishCameraStaticTf.inputs:topicName", "/tf_static"),
