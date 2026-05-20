@@ -315,26 +315,20 @@ global_costmap:
       # frontiers (FREE↔UNKNOWN boundary) exist. Without this the static_layer
       # converts SLAM unknowns to free and exploration finds 0 frontiers.
       track_unknown_space: True
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: True
-        track_unknown_space: True
-        observation_sources: scan
-        scan:
-          topic: /spot_0/scan_nav
-          max_obstacle_height: 2.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 10.0
-          raytrace_min_range: 1.0
-          obstacle_max_range: 10.0
-          obstacle_min_range: 1.0
+      # obstacle_layer is removed from the global costmap because its LiDAR
+      # clearing would re-mark camera-unseen cells as FREE, defeating the
+      # /map_explorable mask. Walls/obstacles still come in through the
+      # static_layer (which gets them from /map_explorable). Dynamic
+      # collision avoidance lives in the local_costmap (unchanged).
+      plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
         track_unknown_space: True
+        # Camera-coverage-masked map: cells the front camera has not seen
+        # are -1 (unknown) here, which become frontiers for explore_lite so
+        # the robot has to physically enter every room.
+        map_topic: /map_explorable
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 0.3
