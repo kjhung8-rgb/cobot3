@@ -38,6 +38,9 @@ class SurvivorDetector(Node):
         self.declare_parameter("survivor_pose_topic", "/detected_survivor_pose")
         self.declare_parameter("confidence_threshold", 0.4)
         self.declare_parameter("device", "cuda")
+        self.declare_parameter("imgsz", 640)
+        self.declare_parameter("inference_period_sec", 0.1)
+        self.declare_parameter("annotated_publish_period_sec", 0.1)
         self.declare_parameter("person_only", True)
         self.declare_parameter("base_frame", "spot_0/base_link")
         self.declare_parameter("target_frame", "map")
@@ -63,6 +66,13 @@ class SurvivorDetector(Node):
 
         self.conf_thresh = float(self.get_parameter("confidence_threshold").value)
         self.device = self.get_parameter("device").value
+        self.imgsz = int(self.get_parameter("imgsz").value)
+        self.inference_period = float(
+            self.get_parameter("inference_period_sec").value
+        )
+        self.annotated_period = float(
+            self.get_parameter("annotated_publish_period_sec").value
+        )
         self.person_only = bool(self.get_parameter("person_only").value)
         self.base_frame = self.get_parameter("base_frame").value
         self.target_frame = self.get_parameter("target_frame").value
@@ -81,6 +91,10 @@ class SurvivorDetector(Node):
 
         self.bridge = CvBridge()
         self.camera_info: Optional[CameraInfo] = None
+        self._last_inference_time = self.get_clock().now() - Duration(seconds=9999.0)
+        self._last_annotated_pub_time = self.get_clock().now() - Duration(
+            seconds=9999.0
+        )
         self._last_pose_pub_time = self.get_clock().now() - Duration(seconds=9999.0)
         self._frame_count = 0
 
@@ -104,6 +118,11 @@ class SurvivorDetector(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
+        annotated_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
         self.image_sub = message_filters.Subscriber(
             self, Image, image_topic, qos_profile=sensor_qos
@@ -121,7 +140,7 @@ class SurvivorDetector(Node):
         self.create_subscription(
             CameraInfo, camera_info_topic, self._on_camera_info, reliable_qos
         )
-        self.pub_image = self.create_publisher(Image, annotated_topic, 10)
+        self.pub_image = self.create_publisher(Image, annotated_topic, annotated_qos)
         self.pub_detected = self.create_publisher(Bool, detected_topic, 10)
         self.pub_base_pose = self.create_publisher(PoseStamped, base_pose_topic, 10)
         self.pub_survivor_pose = self.create_publisher(
@@ -150,6 +169,10 @@ class SurvivorDetector(Node):
         self.camera_info = msg
 
     def _on_rgbd(self, image_msg: Image, depth_msg: Image):
+        if not self._period_due(self._last_inference_time, self.inference_period):
+            return
+        self._last_inference_time = self.get_clock().now()
+
         try:
             frame = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
             depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
@@ -228,20 +251,29 @@ class SurvivorDetector(Node):
             conf=self.conf_thresh,
             classes=classes,
             device=self.device,
+            imgsz=self.imgsz,
             verbose=False,
         )[0]
 
     def _publish_annotated(self, result, header):
+        if self.pub_image.get_subscription_count() == 0:
+            return
+        if not self._period_due(self._last_annotated_pub_time, self.annotated_period):
+            return
         annotated = result.plot()
         out_msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
         out_msg.header = header
         self.pub_image.publish(out_msg)
+        self._last_annotated_pub_time = self.get_clock().now()
+
+    def _period_due(self, last_time, period_sec: float) -> bool:
+        if period_sec <= 0.0:
+            return True
+        elapsed = self.get_clock().now() - last_time
+        return elapsed.nanoseconds >= int(period_sec * 1e9)
 
     def _pose_publish_due(self) -> bool:
-        if self.pose_period <= 0.0:
-            return True
-        elapsed = self.get_clock().now() - self._last_pose_pub_time
-        return elapsed.nanoseconds >= int(self.pose_period * 1e9)
+        return self._period_due(self._last_pose_pub_time, self.pose_period)
 
     def _best_localizable_box(self, boxes, depth, encoding):
         sorted_boxes = sorted(boxes, key=lambda b: float(b.conf[0]), reverse=True)
