@@ -24,6 +24,9 @@ from .constants import (
     CAMERA_INFO_TOPIC,
     CMD_VEL_GRAPH_PATH,
     CMD_VEL_TOPIC,
+    CMD_VEL_TO_POLICY_ANGULAR_Z_SCALE,
+    CMD_VEL_TO_POLICY_LINEAR_X_SCALE,
+    CMD_VEL_TO_POLICY_LINEAR_Y_SCALE,
     COLOR_IMAGE_TOPIC,
     DEPTH_IMAGE_TOPIC,
     FRONT_CAM_FRAME,
@@ -94,7 +97,11 @@ def setup_cmd_vel_graph(sample):
 
                 # Spot policy command: [forward, lateral, yaw]
                 sample._base_command = np.array(
-                    [lin_x * 2.0, lin_y * 2.0, ang_z * 2.0],
+                    [
+                        lin_x * CMD_VEL_TO_POLICY_LINEAR_X_SCALE,
+                        lin_y * CMD_VEL_TO_POLICY_LINEAR_Y_SCALE,
+                        ang_z * CMD_VEL_TO_POLICY_ANGULAR_Z_SCALE,
+                    ],
                     dtype=np.float32,
                 )
             except Exception:

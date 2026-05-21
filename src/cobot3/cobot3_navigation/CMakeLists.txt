@@ -13,6 +13,11 @@ install(DIRECTORY params/
   DESTINATION share/${PROJECT_NAME}/params
 )
 
+# Install shared config files
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 # Install map files
 install(DIRECTORY maps/
   DESTINATION share/${PROJECT_NAME}/maps
