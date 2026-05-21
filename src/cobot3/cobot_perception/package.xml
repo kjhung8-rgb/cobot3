@@ -3,7 +3,7 @@
 <package format="3">
   <name>cobot_perception</name>
   <version>0.1.0</version>
-  <description>YOLOv8 survivor detector for Spot front camera (Isaac Sim).</description>
+  <description>Spot exploration perception utilities for camera coverage and arrival rotation.</description>
   <maintainer email="rokey@todo.todo">rokey</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,14 +11,11 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
