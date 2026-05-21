@@ -87,7 +87,12 @@ def generate_launch_description():
                         executable="camera_coverage_tracker",
                         name="camera_coverage_tracker",
                         output="screen",
-                        parameters=[{"use_sim_time": use_sim_time}],
+                        parameters=[
+                            {"use_sim_time": use_sim_time},
+                            # 4 m: matches waypoint spacing in CPP, faster
+                            # coverage growth, fewer waypoints to visit.
+                            {"max_range_m": 4.0},
+                        ],
                     ),
                 ],
             ),
@@ -118,18 +123,12 @@ def generate_launch_description():
                     {"dampening_hold_sec": 2.0},
                 ],
             ),
-            TimerAction(
-                period=8.0,
-                actions=[
-                    Node(
-                        package="explore_lite",
-                        executable="explore",
-                        name="explore",
-                        output="screen",
-                        parameters=[explore_params, {"use_sim_time": use_sim_time}],
-                    ),
-                ],
-            ),
+            # ── Pure CPP architecture ──
+            # explore_lite and camera_coverage_sweep are both gone. A single
+            # coverage_path_planner generates a grid of waypoints on
+            # SLAM-free space (spaced = camera range) and visits each one,
+            # spinning at each so the camera covers all directions.
+            # No frontier algorithm → no instant-success / blacklist / etc.
             Node(
                 package="yolo",
                 executable="yolo_detector",
@@ -148,17 +147,26 @@ def generate_launch_description():
                 output="screen",
                 parameters=[pose_to_marker_params, {"use_sim_time": use_sim_time}],
             ),
-            # Spin 360 after every explore goal so the narrow front camera FOV
-            # gets a chance to see what 360-deg LiDAR already mapped through.
             TimerAction(
                 period=10.0,
                 actions=[
                     Node(
                         package="cobot_perception",
-                        executable="rotate_on_arrival",
-                        name="rotate_on_arrival",
+                        executable="coverage_path_planner",
+                        name="coverage_path_planner",
                         output="screen",
-                        parameters=[{"use_sim_time": use_sim_time}],
+                        parameters=[
+                            {"use_sim_time": use_sim_time},
+                            {"waypoint_spacing_m": 4.0},
+                            {"do_spin_at_waypoint": True},
+                            {"spin_duration_sec": 4.0},
+                            {"skip_already_seen": True},
+                            # Zone partitioning: 15m × 15m. With 4m
+                            # waypoint spacing each zone has ~12 waypoints
+                            # → meaningful "stay and finish current area
+                            # before moving on" behaviour.
+                            {"zone_size_m": 15.0},
+                        ],
                     ),
                 ],
             ),

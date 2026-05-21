@@ -325,10 +325,11 @@ global_costmap:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
         track_unknown_space: True
-        # Camera-coverage-masked map: cells the front camera has not seen
-        # are -1 (unknown) here, which become frontiers for explore_lite so
-        # the robot has to physically enter every room.
-        map_topic: /map_explorable
+        # ── NEW ARCH (2-phase) ──
+        # Use raw SLAM /map. explore_lite drives LiDAR-frontier mapping
+        # (Phase 1). camera_coverage_sweep node then visits camera-unseen
+        # SLAM-free areas (Phase 2), independently of the costmap.
+        map_topic: /map
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 0.3

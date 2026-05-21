@@ -52,6 +52,14 @@ class CameraCoverageTracker(Node):
         self.declare_parameter('max_range_m', 6.0)
         self.declare_parameter('n_rays', 80)
         self.declare_parameter('update_rate_hz', 5.0)
+        # ── NEW ARCH ──
+        # Quadrant masking disabled by default — global_costmap now uses
+        # raw /map and a separate sweep node handles camera-unseen areas.
+        # The tracker still publishes /camera_coverage for visualization
+        # and for the sweep node to consume.
+        self.declare_parameter('enable_quadrant_zones', False)
+        self.declare_parameter('zone_completion_threshold', 0.85)
+        self.declare_parameter('zone_min_free_cells', 200)
 
         self._cam_frame = self.get_parameter('camera_frame').value
         self._fallback_frame = self.get_parameter('fallback_frame').value
@@ -60,6 +68,16 @@ class CameraCoverageTracker(Node):
         self._max_range = float(self.get_parameter('max_range_m').value)
         self._n_rays = int(self.get_parameter('n_rays').value)
         rate_hz = float(self.get_parameter('update_rate_hz').value)
+        self._enable_zones = bool(self.get_parameter('enable_quadrant_zones').value)
+        self._zone_threshold = float(self.get_parameter('zone_completion_threshold').value)
+        self._zone_min_free = int(self.get_parameter('zone_min_free_cells').value)
+
+        # Zone state — initialised on first /map message.
+        self._zone_center_x: Optional[float] = None
+        self._zone_center_y: Optional[float] = None
+        self._zone_order = ['NE', 'NW', 'SW', 'SE']  # CW order, default
+        self._current_zone_idx = 0
+        self._zone_all_done = False
 
         latched_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -113,6 +131,20 @@ class CameraCoverageTracker(Node):
 
         if self._map is None or self._coverage is None:
             self._coverage = np.full(new_data.shape, -1, dtype=np.int8)
+            # Initialise zone center at the geometric center of the first map.
+            if self._enable_zones and self._zone_center_x is None:
+                self._zone_center_x = (
+                    msg.info.origin.position.x + msg.info.width * msg.info.resolution / 2.0
+                )
+                self._zone_center_y = (
+                    msg.info.origin.position.y + msg.info.height * msg.info.resolution / 2.0
+                )
+                self._initialise_zone_order()
+                self.get_logger().info(
+                    f'Quadrant zones enabled — center=({self._zone_center_x:.2f}, '
+                    f'{self._zone_center_y:.2f}), order={self._zone_order}, '
+                    f'starting in {self._current_zone()}'
+                )
         else:
             old_info = self._map.info
             new_info = msg.info
@@ -130,6 +162,93 @@ class CameraCoverageTracker(Node):
         self._map_data = new_data
         # Publish /map_explorable immediately so Nav2 sees a valid topic.
         self._publish()
+
+    # ------------------------------------------------------------------ #
+    # Quadrant zone helpers
+
+    def _current_zone(self) -> str:
+        return self._zone_order[self._current_zone_idx]
+
+    def _initialise_zone_order(self):
+        """Start with the zone the robot is currently in, then CW."""
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                self._map_frame, self._fallback_frame, rclpy.time.Time()
+            )
+            rx = tf.transform.translation.x
+            ry = tf.transform.translation.y
+            start = self._zone_of_point(rx, ry)
+        except Exception:
+            start = 'NE'
+        cw_full = ['NE', 'SE', 'SW', 'NW']
+        i = cw_full.index(start)
+        self._zone_order = cw_full[i:] + cw_full[:i]
+        self._current_zone_idx = 0
+
+    def _zone_of_point(self, x: float, y: float) -> str:
+        north = y >= self._zone_center_y
+        east = x >= self._zone_center_x
+        if north and east:
+            return 'NE'
+        if north and not east:
+            return 'NW'
+        if not north and east:
+            return 'SE'
+        return 'SW'
+
+    def _zone_mask(self, info, zone: str) -> np.ndarray:
+        """Boolean mask (H,W): True for cells inside the given zone."""
+        H = info.height
+        W = info.width
+        res = info.resolution
+        ox = info.origin.position.x
+        oy = info.origin.position.y
+        xs = ox + (np.arange(W, dtype=np.float32) + 0.5) * res
+        ys = oy + (np.arange(H, dtype=np.float32) + 0.5) * res
+        X, Y = np.meshgrid(xs, ys)
+        north = Y >= self._zone_center_y
+        east = X >= self._zone_center_x
+        if zone == 'NE':
+            return north & east
+        if zone == 'NW':
+            return north & ~east
+        if zone == 'SE':
+            return ~north & east
+        return ~north & ~east  # SW
+
+    def _maybe_advance_zone(self):
+        """Advance to next zone if current zone's camera-seen ratio is high."""
+        if not self._enable_zones or self._zone_all_done:
+            return
+        if self._map_data is None or self._coverage is None:
+            return
+        mask = self._zone_mask(self._map.info, self._current_zone())
+        free_in_zone = mask & (self._map_data == 0)
+        total = int(free_in_zone.sum())
+        if total < self._zone_min_free:
+            # Zone too small (mostly walls) — skip to next.
+            self._advance_zone(reason=f'too few free cells ({total})')
+            return
+        seen = int((free_in_zone & (self._coverage == 0)).sum())
+        ratio = seen / total
+        if ratio >= self._zone_threshold:
+            self._advance_zone(reason=f'{ratio:.0%} seen')
+
+    def _advance_zone(self, reason: str):
+        done_zone = self._current_zone()
+        self._current_zone_idx += 1
+        if self._current_zone_idx >= len(self._zone_order):
+            self._zone_all_done = True
+            self._current_zone_idx = len(self._zone_order) - 1
+            self.get_logger().info(
+                f'Zone {done_zone} done ({reason}). All quadrants explored.'
+            )
+        else:
+            self.get_logger().info(
+                f'Zone {done_zone} done ({reason}) → advancing to {self._current_zone()}'
+            )
+
+    # ------------------------------------------------------------------ #
 
     def _resize_coverage(self, old_info, new_info, old_cov: np.ndarray) -> np.ndarray:
         """Copy old coverage cells into a fresh grid sized to the new map."""
@@ -198,6 +317,30 @@ class CameraCoverageTracker(Node):
                     break
                 self._coverage[gy, gx] = 0
 
+        # Mark a disk around the robot's base_link as seen — the camera lives
+        # 0.5 m ahead of base_link with a downward tilt, so the rays never
+        # cover the robot's own footprint. Without this the robot stands on
+        # UNKNOWN cells in /map_explorable, which confuses Nav2 planning.
+        try:
+            base_tf = self._tf_buffer.lookup_transform(
+                self._map_frame, self._fallback_frame, rclpy.time.Time()
+            )
+            bx = base_tf.transform.translation.x
+            by = base_tf.transform.translation.y
+            bgx = int((bx - ox) / res)
+            bgy = int((by - oy) / res)
+            r_cells = int(0.5 / res)  # 0.5 m disk
+            for dyc in range(-r_cells, r_cells + 1):
+                for dxc in range(-r_cells, r_cells + 1):
+                    if dxc * dxc + dyc * dyc > r_cells * r_cells:
+                        continue
+                    ggx = bgx + dxc
+                    ggy = bgy + dyc
+                    if 0 <= ggx < W and 0 <= ggy < H and self._map_data[ggy, ggx] <= 50:
+                        self._coverage[ggy, ggx] = 0
+        except Exception:
+            pass
+
         self._tick_count += 1
         if self._tick_count % 50 == 0:
             seen = int(np.count_nonzero(self._coverage == 0))
@@ -219,6 +362,10 @@ class CameraCoverageTracker(Node):
         cov_msg.data = self._coverage.flatten().tolist()
         self._cov_pub.publish(cov_msg)
 
+        # Check zone advancement before producing /map_explorable so the
+        # mask reflects the new zone immediately.
+        self._maybe_advance_zone()
+
         # /map_explorable:
         #   obstacle  -> 100 (always preserved so Nav2 sees walls)
         #   free + camera-seen -> 0
@@ -228,6 +375,15 @@ class CameraCoverageTracker(Node):
         exp = np.full_like(self._map_data, -1)
         exp[free_seen] = 0
         exp[obstacle] = 100
+
+        # Zone mask: cells outside the active quadrant become obstacle so
+        # explore_lite's BFS cannot wander there. Once _zone_all_done is set
+        # we stop masking and let it finish anything left.
+        if (self._enable_zones
+                and not self._zone_all_done
+                and self._zone_center_x is not None):
+            in_zone = self._zone_mask(self._map.info, self._current_zone())
+            exp[~in_zone] = 100
 
         exp_msg = OccupancyGrid()
         exp_msg.header.frame_id = self._map_frame
