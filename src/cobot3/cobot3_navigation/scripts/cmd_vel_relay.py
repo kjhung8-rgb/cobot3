@@ -18,7 +18,7 @@ class CmdVelRelay(Node):
 
         self.declare_parameter("enable_person_dampening", False)
         self.declare_parameter("person_detected_topic", "/spot_0/yolo/person_detected")
-        self.declare_parameter("dampening_factor", 0.3)
+        self.declare_parameter("dampening_factor", 0.5)
         self.declare_parameter("dampening_hold_sec", 2.0)
 
         self._enable_dampen = self.get_parameter("enable_person_dampening").value
