@@ -1,5 +1,4 @@
 # Bridge: PoseStamped on /detected_survivor_pose -> RViz Marker /survivor_goal_marker.
-# Matches spot_explore.rviz "Survivor goal" Marker display topic.
 survivor_pose_to_marker:
   ros__parameters:
     pose_subscription_topic: /detected_survivor_pose
@@ -8,5 +7,5 @@ survivor_pose_to_marker:
     marker_z_lift: 0.15
     line_width: 0.12
     sphere_diameter: 0.4
-    accumulate_markers: true
+    accumulate_markers: false
     log_each_pose: true
