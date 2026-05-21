@@ -192,4 +192,4 @@ while simulation_app.is_running():
 
 cv2.destroyAllWindows()
 simulation_app.close()
-print("[완료]")
+print("[414141414]")    
