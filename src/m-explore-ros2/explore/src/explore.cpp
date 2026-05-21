@@ -237,14 +237,29 @@ void Explore::makePlan()
     RCLCPP_DEBUG(logger_, "frontier %zd cost: %f", i, frontiers[i].cost);
   }
 
+  // ── TEST #5 patch (worktree only): retry on empty frontier ──
+  // Camera-coverage-driven /map_explorable can transiently have 0
+  // frontiers right after a goal completes (camera bubble shifted, new
+  // frontiers not yet computed). Retry N times before declaring
+  // exploration complete.
+  static int no_frontier_count = 0;
   if (frontiers.empty()) {
-    RCLCPP_WARN(logger_, "No frontiers found, stopping.");
+    no_frontier_count++;
+    if (no_frontier_count < 30) {
+      RCLCPP_DEBUG(logger_, "No frontiers yet (%d/30), retrying.",
+                   no_frontier_count);
+      return;
+    }
+    RCLCPP_WARN(logger_, "No frontiers found after %d retries, stopping.",
+                no_frontier_count);
     auto status_msg = explore_lite_msgs::msg::ExploreStatus();
     status_msg.status = explore_lite_msgs::msg::ExploreStatus::EXPLORATION_COMPLETE;
     status_pub_->publish(status_msg);
     stop(true);
+    no_frontier_count = 0;
     return;
   }
+  no_frontier_count = 0;
 
   // publish frontiers as visualization markers
   if (visualize_) {
