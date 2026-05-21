@@ -32,6 +32,7 @@ class SurvivorCandidate:
     pose: PoseStamped
     observations: int
     last_seen_ns: int
+    samples: list[tuple[float, float, float]]
 
 
 class SurvivorDetector(Node):
@@ -70,8 +71,15 @@ class SurvivorDetector(Node):
         self.declare_parameter("capture_annotated", True)
         self.declare_parameter("survivor_match_radius_m", 1.0)
         self.declare_parameter("candidate_match_radius_m", 0.8)
-        self.declare_parameter("new_survivor_confirmations", 2)
+        self.declare_parameter("new_survivor_confirmations", 3)
         self.declare_parameter("candidate_ttl_sec", 10.0)
+        self.declare_parameter("depth_roi_x_min_ratio", 0.30)
+        self.declare_parameter("depth_roi_x_max_ratio", 0.70)
+        self.declare_parameter("depth_roi_y_min_ratio", 0.25)
+        self.declare_parameter("depth_roi_y_max_ratio", 0.75)
+        self.declare_parameter("depth_percentile", 25.0)
+        self.declare_parameter("depth_cluster_tolerance_m", 0.45)
+        self.declare_parameter("min_depth_samples", 20)
 
         model_path = self.get_parameter("model_path").value
         image_topic = self.get_parameter("image_topic").value
@@ -122,6 +130,25 @@ class SurvivorDetector(Node):
             1, int(self.get_parameter("new_survivor_confirmations").value)
         )
         self.candidate_ttl = float(self.get_parameter("candidate_ttl_sec").value)
+        self.depth_roi_x_min = float(
+            self.get_parameter("depth_roi_x_min_ratio").value
+        )
+        self.depth_roi_x_max = float(
+            self.get_parameter("depth_roi_x_max_ratio").value
+        )
+        self.depth_roi_y_min = float(
+            self.get_parameter("depth_roi_y_min_ratio").value
+        )
+        self.depth_roi_y_max = float(
+            self.get_parameter("depth_roi_y_max_ratio").value
+        )
+        self.depth_percentile = float(self.get_parameter("depth_percentile").value)
+        self.depth_cluster_tolerance = float(
+            self.get_parameter("depth_cluster_tolerance_m").value
+        )
+        self.min_depth_samples = max(
+            1, int(self.get_parameter("min_depth_samples").value)
+        )
 
         self.bridge = CvBridge()
         self.camera_info: Optional[CameraInfo] = None
@@ -248,55 +275,66 @@ class SurvivorDetector(Node):
         if not self._pose_publish_due():
             return
 
-        candidate = self._best_localizable_box(boxes, depth, depth_msg.encoding)
-        if candidate is None:
-            self.get_logger().warn("Detected person, but no valid depth sample")
+        candidates = self._localizable_boxes(boxes, depth, depth_msg.encoding)
+        if not candidates:
+            self.get_logger().warn("Detected person, but no valid person-depth sample")
             return
 
-        box, u, v, depth_m = candidate
-        camera_point = self._pixel_depth_to_camera_point(
-            u, v, depth_m, image_msg.header.frame_id, image_msg.header.stamp
-        )
-        base_pose = self._transform_point_to_pose(camera_point, self.base_frame)
-        if base_pose is None:
-            return
-        self.pub_base_pose.publish(base_pose)
-
-        target_pose = self._transform_pose(base_pose, self.target_frame)
-        if target_pose is None:
-            return
-        if self.project_to_ground:
-            target_pose.pose.position.z = 0.0
         self._last_pose_pub_time = self.get_clock().now()
+        frame_targets: list[PoseStamped] = []
 
-        survivor_id = self._accept_new_survivor(target_pose)
-        if survivor_id is None:
-            return
-
-        self.pub_survivor_pose.publish(target_pose)
-        self._save_detection_capture(frame, result, survivor_id=survivor_id, force=True)
-
-        conf = float(box.conf[0])
-        bp = base_pose.pose.position
-        tp = target_pose.pose.position
-        self.get_logger().info(
-            "new survivor #%d conf=%.2f depth=%.2fm pixel=(%d,%d) "
-            "base=(%.2f, %.2f, %.2f) %s=(%.2f, %.2f, %.2f)"
-            % (
-                survivor_id,
-                conf,
-                depth_m,
-                u,
-                v,
-                bp.x,
-                bp.y,
-                bp.z,
-                self.target_frame,
-                tp.x,
-                tp.y,
-                tp.z,
+        for box, u, v, depth_m in candidates:
+            camera_point = self._pixel_depth_to_camera_point(
+                u, v, depth_m, image_msg.header.frame_id, image_msg.header.stamp
             )
-        )
+            base_pose = self._transform_point_to_pose(camera_point, self.base_frame)
+            if base_pose is None:
+                continue
+            self.pub_base_pose.publish(base_pose)
+
+            target_pose = self._transform_pose(base_pose, self.target_frame)
+            if target_pose is None:
+                continue
+            if self.project_to_ground:
+                target_pose.pose.position.z = 0.0
+
+            same_frame_index, _ = self._nearest_pose_index(
+                target_pose, frame_targets, self.candidate_match_radius
+            )
+            if same_frame_index is not None:
+                continue
+            frame_targets.append(self._copy_pose(target_pose))
+
+            survivor_id = self._accept_new_survivor(target_pose)
+            if survivor_id is None:
+                continue
+
+            self.pub_survivor_pose.publish(target_pose)
+            self._save_detection_capture(
+                frame, result, survivor_id=survivor_id, force=True
+            )
+
+            conf = float(box.conf[0])
+            bp = base_pose.pose.position
+            tp = target_pose.pose.position
+            self.get_logger().info(
+                "new survivor #%d conf=%.2f depth=%.2fm pixel=(%d,%d) "
+                "base=(%.2f, %.2f, %.2f) %s=(%.2f, %.2f, %.2f)"
+                % (
+                    survivor_id,
+                    conf,
+                    depth_m,
+                    u,
+                    v,
+                    bp.x,
+                    bp.y,
+                    bp.z,
+                    self.target_frame,
+                    tp.x,
+                    tp.y,
+                    tp.z,
+                )
+            )
 
     def _predict(self, frame):
         classes = [PERSON_CLASS_ID] if self.person_only else None
@@ -366,7 +404,10 @@ class SurvivorDetector(Node):
         )
         if pending_index is None:
             candidate = SurvivorCandidate(
-                pose=self._copy_pose(pose), observations=1, last_seen_ns=now_ns
+                pose=self._copy_pose(pose),
+                observations=1,
+                last_seen_ns=now_ns,
+                samples=[self._pose_xyz(pose)],
             )
             self._pending_survivors.append(candidate)
             if self.new_survivor_confirmations > 1:
@@ -443,15 +484,15 @@ class SurvivorDetector(Node):
         return nearest_index, nearest_dist
 
     def _merge_candidate(self, candidate: SurvivorCandidate, pose: PoseStamped, now_ns: int):
-        next_count = candidate.observations + 1
+        candidate.samples.append(self._pose_xyz(pose))
+        xs, ys, zs = zip(*candidate.samples)
         old = candidate.pose.pose.position
-        new = pose.pose.position
-        old.x = (old.x * candidate.observations + new.x) / next_count
-        old.y = (old.y * candidate.observations + new.y) / next_count
-        old.z = (old.z * candidate.observations + new.z) / next_count
+        old.x = float(np.median(xs))
+        old.y = float(np.median(ys))
+        old.z = float(np.median(zs))
         candidate.pose.header = pose.header
         candidate.pose.pose.orientation = pose.pose.orientation
-        candidate.observations = next_count
+        candidate.observations += 1
         candidate.last_seen_ns = now_ns
 
     @staticmethod
@@ -470,6 +511,11 @@ class SurvivorDetector(Node):
         out.pose.orientation = pose.pose.orientation
         return out
 
+    @staticmethod
+    def _pose_xyz(pose: PoseStamped) -> tuple[float, float, float]:
+        p = pose.pose.position
+        return p.x, p.y, p.z
+
     def _period_due(self, last_time, period_sec: float) -> bool:
         if period_sec <= 0.0:
             return True
@@ -479,39 +525,90 @@ class SurvivorDetector(Node):
     def _pose_publish_due(self) -> bool:
         return self._period_due(self._last_pose_pub_time, self.pose_period)
 
-    def _best_localizable_box(self, boxes, depth, encoding):
+    def _localizable_boxes(self, boxes, depth, encoding):
+        localized = []
         sorted_boxes = sorted(boxes, key=lambda b: float(b.conf[0]), reverse=True)
         for box in sorted_boxes:
-            x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
-            u = int((x1 + x2) * 0.5)
-            v = int((y1 + y2) * 0.5)
-            depth_m = self._sample_depth(depth, u, v, encoding)
-            if depth_m is not None:
-                return box, u, v, depth_m
-        return None
+            sample = self._sample_box_depth(depth, box, encoding)
+            if sample is not None:
+                u, v, depth_m = sample
+                localized.append((box, u, v, depth_m))
+        return localized
 
-    def _sample_depth(self, depth, u: int, v: int, encoding: str) -> Optional[float]:
+    def _sample_box_depth(self, depth, box, encoding: str):
         arr = np.asarray(depth)
         if arr.ndim != 2 or arr.size == 0:
             return None
 
         h, w = arr.shape
-        if u < 0 or v < 0 or u >= w or v >= h:
+        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
+        x1 = max(0.0, min(float(w - 1), x1))
+        x2 = max(0.0, min(float(w - 1), x2))
+        y1 = max(0.0, min(float(h - 1), y1))
+        y2 = max(0.0, min(float(h - 1), y2))
+        if x2 <= x1 or y2 <= y1:
             return None
 
-        r = max(0, self.depth_radius)
-        us, ue = max(0, u - r), min(w, u + r + 1)
-        vs, ve = max(0, v - r), min(h, v + r + 1)
+        roi = self._depth_roi_from_box(x1, y1, x2, y2, w, h)
+        if roi is None:
+            return None
+        us, ue, vs, ve = roi
         patch = arr[vs:ve, us:ue].astype(np.float32, copy=False)
 
         if encoding.upper() == "16UC1":
             patch = patch / 1000.0
 
-        valid = patch[np.isfinite(patch)]
-        valid = valid[(valid >= self.min_depth) & (valid <= self.max_depth)]
-        if valid.size == 0:
+        valid_mask = (
+            np.isfinite(patch)
+            & (patch >= self.min_depth)
+            & (patch <= self.max_depth)
+        )
+        valid = patch[valid_mask]
+        if valid.size < self.min_depth_samples:
             return None
-        return float(np.median(valid))
+
+        percentile = min(100.0, max(0.0, self.depth_percentile))
+        seed_depth = float(np.percentile(valid, percentile))
+        cluster_mask = valid_mask & (
+            np.abs(patch - seed_depth) <= self.depth_cluster_tolerance
+        )
+        cluster = patch[cluster_mask]
+        if cluster.size < self.min_depth_samples:
+            near_mask = valid_mask & (patch <= seed_depth + self.depth_cluster_tolerance)
+            cluster = patch[near_mask]
+            cluster_mask = near_mask
+
+        if cluster.size < self.min_depth_samples:
+            return None
+
+        ys, xs = np.nonzero(cluster_mask)
+        if xs.size == 0 or ys.size == 0:
+            return None
+
+        u = int(us + np.median(xs))
+        v = int(vs + np.median(ys))
+        depth_m = float(np.median(cluster))
+        return u, v, depth_m
+
+    def _depth_roi_from_box(self, x1: float, y1: float, x2: float, y2: float, w: int, h: int):
+        rx1 = min(max(self.depth_roi_x_min, 0.0), 1.0)
+        rx2 = min(max(self.depth_roi_x_max, 0.0), 1.0)
+        ry1 = min(max(self.depth_roi_y_min, 0.0), 1.0)
+        ry2 = min(max(self.depth_roi_y_max, 0.0), 1.0)
+        if rx2 <= rx1:
+            rx1, rx2 = 0.30, 0.70
+        if ry2 <= ry1:
+            ry1, ry2 = 0.25, 0.75
+
+        bw = x2 - x1
+        bh = y2 - y1
+        us = int(max(0, min(w - 1, math.floor(x1 + bw * rx1))))
+        ue = int(max(0, min(w, math.ceil(x1 + bw * rx2))))
+        vs = int(max(0, min(h - 1, math.floor(y1 + bh * ry1))))
+        ve = int(max(0, min(h, math.ceil(y1 + bh * ry2))))
+        if ue <= us or ve <= vs:
+            return None
+        return us, ue, vs, ve
 
     def _pixel_depth_to_camera_point(
         self, u: int, v: int, depth_m: float, frame_id: str, stamp
