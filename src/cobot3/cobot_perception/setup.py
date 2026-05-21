@@ -26,6 +26,9 @@ setup(
         'console_scripts': [
             'rotate_on_arrival = cobot_perception.rotate_on_arrival:main',
             'camera_coverage_tracker = cobot_perception.camera_coverage_tracker:main',
+            'camera_coverage_sweep = cobot_perception.camera_coverage_sweep:main',
+            'coverage_path_planner = cobot_perception.coverage_path_planner:main',
+            'stop_watchdog = cobot_perception.stop_watchdog:main',
         ],
     },
 )
