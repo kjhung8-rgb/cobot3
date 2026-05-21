@@ -138,6 +138,28 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /explore/frontiers
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Coverage Zones
+      Namespaces: {}
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /coverage_zones
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Coverage Waypoints
+      Namespaces: {}
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /coverage_waypoints
+      Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
       Name: Survivor goal (PoseStamped /detected_survivor_pose)
