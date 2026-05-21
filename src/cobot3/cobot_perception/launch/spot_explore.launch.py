@@ -6,7 +6,7 @@
 #   3. Nav2 navigation_launch (no map_server/AMCL, SLAM provides map)
 #   4. cmd_vel_relay (Nav2 /cmd_vel -> /spot_0/cmd_vel)
 #   5. explore_lite (frontier-based autonomous exploration)
-#   6. survivor_detector (YOLOv8 on front camera)
+#   6. yolo_detector (YOLOv8 RGB-D localization on front camera)
 #   7. survivor_pose_to_marker (PoseStamped -> RViz X; 테스트: ros2 topic pub --once ...)
 #   8. RViz with combined view
 #
@@ -22,29 +22,19 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# Survivor detector imports ultralytics/torch, which only live in this venv.
-# The ament entry-point wrapper carries a #!/usr/bin/python3 shebang from build
-# time, so we override the interpreter via the `prefix` arg below.
-PERCEPTION_VENV_PYTHON = os.environ.get(
-    "COBOT_PERCEPTION_PYTHON",
-    os.path.expanduser("~/dev_ws/venv/perception/bin/python"),
-)
-
-
 def generate_launch_description():
     pkg_perception = get_package_share_directory("cobot_perception")
+    pkg_yolo = get_package_share_directory("yolo")
     pkg_nav = get_package_share_directory("cobot3_navigation")
     nav2_bringup_dir = os.path.join(get_package_share_directory("nav2_bringup"), "launch")
 
     slam_params = os.path.join(pkg_nav, "params", "spot_slam_params.yaml")
     nav2_params = os.path.join(pkg_nav, "params", "spot_navigation_params.yaml")
-    detector_params = os.path.join(pkg_perception, "config", "survivor_detector.yaml")
+    detector_params = os.path.join(pkg_yolo, "config", "yolo_detector.yaml")
     explore_params = os.path.join(pkg_perception, "config", "explore.yaml")
-    pose_to_marker_params = os.path.join(
-        pkg_perception, "config", "survivor_pose_to_marker.yaml"
-    )
+    pose_to_marker_params = os.path.join(pkg_yolo, "config", "survivor_pose_to_marker.yaml")
     rviz_cfg = os.path.join(pkg_perception, "rviz", "spot_explore.rviz")
-    yolo_model = os.path.join(pkg_perception, "models", "yolov8n.pt")
+    yolo_model = os.path.join(pkg_yolo, "models", "yolov8s.pt")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
 
@@ -141,15 +131,18 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="cobot_perception",
-                executable="survivor_detector",
-                name="survivor_detector",
+                package="yolo",
+                executable="yolo_detector",
+                name="yolo_detector",
                 output="screen",
-                prefix=PERCEPTION_VENV_PYTHON,
-                parameters=[detector_params, {"model_path": yolo_model}],
+                parameters=[
+                    detector_params,
+                    {"model_path": yolo_model},
+                    {"use_sim_time": use_sim_time},
+                ],
             ),
             Node(
-                package="cobot_perception",
+                package="yolo",
                 executable="survivor_pose_to_marker",
                 name="survivor_pose_to_marker",
                 output="screen",

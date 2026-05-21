@@ -117,8 +117,8 @@ velocity_smoother:
     smoothing_frequency: 20.0 
     scale_velocities: false 
     feedback: "OPEN_LOOP" 
-    max_velocity: [1.00, 0.50, 1.20]
-    min_velocity: [-0.50, -0.50, -1.20]
+    max_velocity: [1.50, 0.50, 1.50]
+    min_velocity: [-0.50, -0.50, -1.50]
     deadband_velocity: [0.0, 0.0, 0.0] 
     velocity_timeout: 1.0 
     max_accel: [1.0, 0.6, 1.2] 
