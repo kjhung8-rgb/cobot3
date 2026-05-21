@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Optional
 
+import cv2
 import message_filters
 import numpy as np
 import rclpy
@@ -54,6 +56,12 @@ class SurvivorDetector(Node):
         self.declare_parameter("pose_publish_period_sec", 1.0)
         self.declare_parameter("project_target_pose_to_ground", True)
         self.declare_parameter("optical_to_camera_link", True)
+        self.declare_parameter("save_detection_images", True)
+        self.declare_parameter(
+            "capture_dir", "/home/rokey/dev_ws/cobot3/src/yolo/dectected_person"
+        )
+        self.declare_parameter("capture_period_sec", 2.0)
+        self.declare_parameter("capture_annotated", True)
 
         model_path = self.get_parameter("model_path").value
         image_topic = self.get_parameter("image_topic").value
@@ -88,6 +96,12 @@ class SurvivorDetector(Node):
         self.optical_to_camera_link = bool(
             self.get_parameter("optical_to_camera_link").value
         )
+        self.save_detection_images = bool(
+            self.get_parameter("save_detection_images").value
+        )
+        self.capture_dir = Path(str(self.get_parameter("capture_dir").value))
+        self.capture_period = float(self.get_parameter("capture_period_sec").value)
+        self.capture_annotated = bool(self.get_parameter("capture_annotated").value)
 
         self.bridge = CvBridge()
         self.camera_info: Optional[CameraInfo] = None
@@ -96,7 +110,18 @@ class SurvivorDetector(Node):
             seconds=9999.0
         )
         self._last_pose_pub_time = self.get_clock().now() - Duration(seconds=9999.0)
+        self._last_capture_time = self.get_clock().now() - Duration(seconds=9999.0)
         self._frame_count = 0
+        self._capture_count = 0
+
+        if self.save_detection_images:
+            try:
+                self.capture_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                self.get_logger().warn(
+                    f"Could not create capture directory {self.capture_dir}: {exc}"
+                )
+                self.save_detection_images = False
 
         self.get_logger().info(f"Loading YOLOv8 model: {model_path}")
         self.model = YOLO(model_path)
@@ -194,6 +219,8 @@ class SurvivorDetector(Node):
                 self.get_logger().info(f"frame {self._frame_count}: no survivor")
             return
 
+        self._save_detection_capture(frame, result)
+
         if self.camera_info is None:
             self.get_logger().warn("No CameraInfo yet; cannot localize survivor")
             return
@@ -265,6 +292,30 @@ class SurvivorDetector(Node):
         out_msg.header = header
         self.pub_image.publish(out_msg)
         self._last_annotated_pub_time = self.get_clock().now()
+
+    def _save_detection_capture(self, frame, result):
+        if not self.save_detection_images:
+            return
+        if not self._period_due(self._last_capture_time, self.capture_period):
+            return
+
+        image = result.plot() if self.capture_annotated else frame
+        now = self.get_clock().now()
+        self._capture_count += 1
+        capture_path = self.capture_dir / (
+            f"person_{now.nanoseconds}_{self._capture_count:06d}.jpg"
+        )
+
+        try:
+            if not cv2.imwrite(str(capture_path), image):
+                self.get_logger().warn(f"Failed to save detection image: {capture_path}")
+                return
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to save detection image {capture_path}: {exc}")
+            return
+
+        self._last_capture_time = now
+        self.get_logger().info(f"saved detection image: {capture_path}")
 
     def _period_due(self, last_time, period_sec: float) -> bool:
         if period_sec <= 0.0:
