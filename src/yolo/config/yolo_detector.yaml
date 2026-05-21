@@ -25,3 +25,7 @@ yolo_detector:
     pose_publish_period_sec: 1.0
     project_target_pose_to_ground: true
     optical_to_camera_link: true
+    save_detection_images: true
+    capture_dir: src/yolo/dectected_person
+    capture_period_sec: 2.0
+    capture_annotated: true
