@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,13 @@ from ultralytics import YOLO
 
 
 PERSON_CLASS_ID = 0  # COCO 'person'
+
+
+@dataclass
+class SurvivorCandidate:
+    pose: PoseStamped
+    observations: int
+    last_seen_ns: int
 
 
 class SurvivorDetector(Node):
@@ -57,11 +65,13 @@ class SurvivorDetector(Node):
         self.declare_parameter("project_target_pose_to_ground", True)
         self.declare_parameter("optical_to_camera_link", True)
         self.declare_parameter("save_detection_images", True)
-        self.declare_parameter(
-            "capture_dir", "/home/rokey/dev_ws/cobot3/src/yolo/dectected_person"
-        )
+        self.declare_parameter("capture_dir", "src/yolo/dectected_person")
         self.declare_parameter("capture_period_sec", 2.0)
         self.declare_parameter("capture_annotated", True)
+        self.declare_parameter("survivor_match_radius_m", 1.0)
+        self.declare_parameter("candidate_match_radius_m", 0.8)
+        self.declare_parameter("new_survivor_confirmations", 2)
+        self.declare_parameter("candidate_ttl_sec", 10.0)
 
         model_path = self.get_parameter("model_path").value
         image_topic = self.get_parameter("image_topic").value
@@ -102,6 +112,16 @@ class SurvivorDetector(Node):
         self.capture_dir = Path(str(self.get_parameter("capture_dir").value))
         self.capture_period = float(self.get_parameter("capture_period_sec").value)
         self.capture_annotated = bool(self.get_parameter("capture_annotated").value)
+        self.survivor_match_radius = float(
+            self.get_parameter("survivor_match_radius_m").value
+        )
+        self.candidate_match_radius = float(
+            self.get_parameter("candidate_match_radius_m").value
+        )
+        self.new_survivor_confirmations = max(
+            1, int(self.get_parameter("new_survivor_confirmations").value)
+        )
+        self.candidate_ttl = float(self.get_parameter("candidate_ttl_sec").value)
 
         self.bridge = CvBridge()
         self.camera_info: Optional[CameraInfo] = None
@@ -113,6 +133,8 @@ class SurvivorDetector(Node):
         self._last_capture_time = self.get_clock().now() - Duration(seconds=9999.0)
         self._frame_count = 0
         self._capture_count = 0
+        self._confirmed_survivors: list[PoseStamped] = []
+        self._pending_survivors: list[SurvivorCandidate] = []
 
         if self.save_detection_images:
             try:
@@ -219,8 +241,6 @@ class SurvivorDetector(Node):
                 self.get_logger().info(f"frame {self._frame_count}: no survivor")
             return
 
-        self._save_detection_capture(frame, result)
-
         if self.camera_info is None:
             self.get_logger().warn("No CameraInfo yet; cannot localize survivor")
             return
@@ -247,16 +267,23 @@ class SurvivorDetector(Node):
             return
         if self.project_to_ground:
             target_pose.pose.position.z = 0.0
-        self.pub_survivor_pose.publish(target_pose)
         self._last_pose_pub_time = self.get_clock().now()
+
+        survivor_id = self._accept_new_survivor(target_pose)
+        if survivor_id is None:
+            return
+
+        self.pub_survivor_pose.publish(target_pose)
+        self._save_detection_capture(frame, result, survivor_id=survivor_id, force=True)
 
         conf = float(box.conf[0])
         bp = base_pose.pose.position
         tp = target_pose.pose.position
         self.get_logger().info(
-            "survivor conf=%.2f depth=%.2fm pixel=(%d,%d) "
+            "new survivor #%d conf=%.2f depth=%.2fm pixel=(%d,%d) "
             "base=(%.2f, %.2f, %.2f) %s=(%.2f, %.2f, %.2f)"
             % (
+                survivor_id,
                 conf,
                 depth_m,
                 u,
@@ -293,17 +320,20 @@ class SurvivorDetector(Node):
         self.pub_image.publish(out_msg)
         self._last_annotated_pub_time = self.get_clock().now()
 
-    def _save_detection_capture(self, frame, result):
+    def _save_detection_capture(
+        self, frame, result, survivor_id: int | None = None, force=False
+    ):
         if not self.save_detection_images:
             return
-        if not self._period_due(self._last_capture_time, self.capture_period):
+        if not force and not self._period_due(self._last_capture_time, self.capture_period):
             return
 
         image = result.plot() if self.capture_annotated else frame
         now = self.get_clock().now()
         self._capture_count += 1
+        prefix = f"survivor_{survivor_id:03d}" if survivor_id is not None else "person"
         capture_path = self.capture_dir / (
-            f"person_{now.nanoseconds}_{self._capture_count:06d}.jpg"
+            f"{prefix}_{now.nanoseconds}_{self._capture_count:06d}.jpg"
         )
 
         try:
@@ -316,6 +346,129 @@ class SurvivorDetector(Node):
 
         self._last_capture_time = now
         self.get_logger().info(f"saved detection image: {capture_path}")
+
+    def _accept_new_survivor(self, pose: PoseStamped) -> Optional[int]:
+        self._prune_pending_survivors()
+
+        known_index, known_dist = self._nearest_pose_index(
+            pose, self._confirmed_survivors, self.survivor_match_radius
+        )
+        if known_index is not None:
+            self.get_logger().info(
+                "duplicate survivor ignored: existing #%d distance=%.2fm"
+                % (known_index + 1, known_dist)
+            )
+            return None
+
+        now_ns = self.get_clock().now().nanoseconds
+        pending_index, pending_dist = self._nearest_candidate_index(
+            pose, self._pending_survivors, self.candidate_match_radius
+        )
+        if pending_index is None:
+            candidate = SurvivorCandidate(
+                pose=self._copy_pose(pose), observations=1, last_seen_ns=now_ns
+            )
+            self._pending_survivors.append(candidate)
+            if self.new_survivor_confirmations > 1:
+                self.get_logger().info(
+                    "new survivor candidate 1/%d at %s=(%.2f, %.2f, %.2f)"
+                    % (
+                        self.new_survivor_confirmations,
+                        pose.header.frame_id,
+                        pose.pose.position.x,
+                        pose.pose.position.y,
+                        pose.pose.position.z,
+                    )
+                )
+                return None
+        else:
+            candidate = self._pending_survivors[pending_index]
+            self._merge_candidate(candidate, pose, now_ns)
+            if candidate.observations < self.new_survivor_confirmations:
+                self.get_logger().info(
+                    "new survivor candidate %d/%d distance=%.2fm"
+                    % (
+                        candidate.observations,
+                        self.new_survivor_confirmations,
+                        pending_dist,
+                    )
+                )
+                return None
+
+        candidate_pose = candidate.pose
+        self._confirmed_survivors.append(self._copy_pose(candidate_pose))
+        if pending_index is None:
+            self._pending_survivors = [
+                c for c in self._pending_survivors if c is not candidate
+            ]
+        else:
+            self._pending_survivors.pop(pending_index)
+
+        pose.header = candidate_pose.header
+        pose.pose = candidate_pose.pose
+        survivor_id = len(self._confirmed_survivors)
+        self.get_logger().info(
+            "confirmed survivor #%d; total=%d"
+            % (survivor_id, len(self._confirmed_survivors))
+        )
+        return survivor_id
+
+    def _prune_pending_survivors(self):
+        if self.candidate_ttl <= 0.0:
+            return
+        now_ns = self.get_clock().now().nanoseconds
+        ttl_ns = int(self.candidate_ttl * 1e9)
+        self._pending_survivors = [
+            c for c in self._pending_survivors if now_ns - c.last_seen_ns <= ttl_ns
+        ]
+
+    def _nearest_pose_index(self, pose, poses, max_dist: float):
+        nearest_index = None
+        nearest_dist = math.inf
+        for index, candidate in enumerate(poses):
+            dist = self._pose_xy_distance(pose, candidate)
+            if dist <= max_dist and dist < nearest_dist:
+                nearest_index = index
+                nearest_dist = dist
+        return nearest_index, nearest_dist
+
+    def _nearest_candidate_index(self, pose, candidates, max_dist: float):
+        nearest_index = None
+        nearest_dist = math.inf
+        for index, candidate in enumerate(candidates):
+            dist = self._pose_xy_distance(pose, candidate.pose)
+            if dist <= max_dist and dist < nearest_dist:
+                nearest_index = index
+                nearest_dist = dist
+        return nearest_index, nearest_dist
+
+    def _merge_candidate(self, candidate: SurvivorCandidate, pose: PoseStamped, now_ns: int):
+        next_count = candidate.observations + 1
+        old = candidate.pose.pose.position
+        new = pose.pose.position
+        old.x = (old.x * candidate.observations + new.x) / next_count
+        old.y = (old.y * candidate.observations + new.y) / next_count
+        old.z = (old.z * candidate.observations + new.z) / next_count
+        candidate.pose.header = pose.header
+        candidate.pose.pose.orientation = pose.pose.orientation
+        candidate.observations = next_count
+        candidate.last_seen_ns = now_ns
+
+    @staticmethod
+    def _pose_xy_distance(a: PoseStamped, b: PoseStamped) -> float:
+        dx = a.pose.position.x - b.pose.position.x
+        dy = a.pose.position.y - b.pose.position.y
+        return math.hypot(dx, dy)
+
+    @staticmethod
+    def _copy_pose(pose: PoseStamped) -> PoseStamped:
+        out = PoseStamped()
+        out.header = pose.header
+        out.pose.position.x = pose.pose.position.x
+        out.pose.position.y = pose.pose.position.y
+        out.pose.position.z = pose.pose.position.z
+        out.pose.orientation = pose.pose.orientation
+        return out
 
     def _period_due(self, last_time, period_sec: float) -> bool:
         if period_sec <= 0.0:

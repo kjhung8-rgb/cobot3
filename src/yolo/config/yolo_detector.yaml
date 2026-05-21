@@ -29,3 +29,7 @@ yolo_detector:
     capture_dir: src/yolo/dectected_person
     capture_period_sec: 2.0
     capture_annotated: true
+    survivor_match_radius_m: 1.0
+    candidate_match_radius_m: 0.8
+    new_survivor_confirmations: 2
+    candidate_ttl_sec: 10.0
