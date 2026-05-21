@@ -1,0 +1,19 @@
+spot_speed:
+  # Normal autonomous exploration command limits used by Nav2 MPPI.
+  default_linear_mps: 1.9
+  default_angular_radps: 1.9
+
+  # Absolute command limits used by velocity_smoother and Isaac policy clamp.
+  max_linear_mps: 2.4
+  max_angular_radps: 2.4
+  max_reverse_mps: 0.5
+  max_lateral_mps: 0.5
+
+  # Slowdown applied by cmd_vel_relay while YOLO is seeing a survivor.
+  yolo_speed_factor: 0.5
+  yolo_hold_sec: 2.0
+
+  # Isaac Spot policy input scale. Keep this separate from ROS cmd_vel units.
+  cmd_vel_to_policy_linear_x_scale: 2.0
+  cmd_vel_to_policy_linear_y_scale: 2.0
+  cmd_vel_to_policy_angular_z_scale: 2.0

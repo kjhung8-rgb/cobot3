@@ -117,8 +117,8 @@ velocity_smoother:
     smoothing_frequency: 20.0 
     scale_velocities: false 
     feedback: "OPEN_LOOP" 
-    max_velocity: [1.50, 0.50, 1.50]
-    min_velocity: [-0.50, -0.50, -1.50]
+    max_velocity: [2.40, 0.50, 2.40]
+    min_velocity: [-0.50, -0.50, -2.40]
     deadband_velocity: [0.0, 0.0, 0.0] 
     velocity_timeout: 1.0 
     max_accel: [1.0, 0.6, 1.2] 
@@ -159,12 +159,11 @@ controller_server:
       vx_std: 0.20
       vy_std: 0.15
       wz_std: 0.30
-      # Doubled from defaults to make exploration walltime closer to 5-10 min.
-      # Spot's RL policy handles up to ~1.5 m/s; 1.0 is a safe headroom.
-      vx_max: 1.00
+      # Exploration cruise limit. Absolute clamp remains in velocity_smoother.
+      vx_max: 1.90
       vx_min: -0.50
       vy_max: 0.50
-      wz_max: 1.20
+      wz_max: 1.90
       ax_max: 2.0
       ax_min: -2.0
       ay_max: 1.2
