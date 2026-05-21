@@ -33,3 +33,10 @@ yolo_detector:
     candidate_match_radius_m: 0.8
     new_survivor_confirmations: 2
     candidate_ttl_sec: 10.0
+    depth_roi_x_min_ratio: 0.30
+    depth_roi_x_max_ratio: 0.70
+    depth_roi_y_min_ratio: 0.25
+    depth_roi_y_max_ratio: 0.75
+    depth_percentile: 25.0
+    depth_cluster_tolerance_m: 0.45
+    min_depth_samples: 20

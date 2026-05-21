@@ -10,7 +10,7 @@ spot_speed:
   max_lateral_mps: 0.5
 
   # Slowdown applied by cmd_vel_relay while YOLO is seeing a survivor.
-  yolo_speed_factor: 0.5
+  yolo_speed_factor: 0.3
   yolo_hold_sec: 2.0
 
   # Isaac Spot policy input scale. Keep this separate from ROS cmd_vel units.
