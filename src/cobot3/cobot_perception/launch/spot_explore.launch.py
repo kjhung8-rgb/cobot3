@@ -7,7 +7,8 @@
 #   4. cmd_vel_relay (Nav2 /cmd_vel -> /spot_0/cmd_vel)
 #   5. explore_lite (frontier-based autonomous exploration)
 #   6. survivor_detector (YOLOv8 on front camera)
-#   7. RViz with combined view
+#   7. survivor_pose_to_marker (PoseStamped -> RViz X; 테스트: ros2 topic pub --once ...)
+#   8. RViz with combined view
 #
 # Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,front_cam/*}.
 
@@ -24,7 +25,10 @@ from launch_ros.actions import Node
 # Survivor detector imports ultralytics/torch, which only live in this venv.
 # The ament entry-point wrapper carries a #!/usr/bin/python3 shebang from build
 # time, so we override the interpreter via the `prefix` arg below.
-PERCEPTION_VENV_PYTHON = "/home/rokey/dev_ws/venv/perception/bin/python"
+PERCEPTION_VENV_PYTHON = os.environ.get(
+    "COBOT_PERCEPTION_PYTHON",
+    os.path.expanduser("~/dev_ws/venv/perception/bin/python"),
+)
 
 
 def generate_launch_description():
@@ -36,6 +40,9 @@ def generate_launch_description():
     nav2_params = os.path.join(pkg_nav, "params", "spot_navigation_params.yaml")
     detector_params = os.path.join(pkg_perception, "config", "survivor_detector.yaml")
     explore_params = os.path.join(pkg_perception, "config", "explore.yaml")
+    pose_to_marker_params = os.path.join(
+        pkg_perception, "config", "survivor_pose_to_marker.yaml"
+    )
     rviz_cfg = os.path.join(pkg_perception, "rviz", "spot_explore.rviz")
     yolo_model = os.path.join(pkg_perception, "models", "yolov8n.pt")
 
@@ -140,6 +147,13 @@ def generate_launch_description():
                 output="screen",
                 prefix=PERCEPTION_VENV_PYTHON,
                 parameters=[detector_params, {"model_path": yolo_model}],
+            ),
+            Node(
+                package="cobot_perception",
+                executable="survivor_pose_to_marker",
+                name="survivor_pose_to_marker",
+                output="screen",
+                parameters=[pose_to_marker_params, {"use_sim_time": use_sim_time}],
             ),
             # Spin 360 after every explore goal so the narrow front camera FOV
             # gets a chance to see what 360-deg LiDAR already mapped through.
