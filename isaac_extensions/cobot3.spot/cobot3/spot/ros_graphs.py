@@ -31,6 +31,8 @@ from .constants import (
     DEPTH_IMAGE_TOPIC,
     FRONT_CAM_FRAME,
     FRONT_CAMERA_PRIM_PATH,
+    FRONT_CAMERA_RENDER_HEIGHT,
+    FRONT_CAMERA_RENDER_WIDTH,
     FRONT_CAMERA_TF_ROTATION_XYZW,
     FRONT_CAMERA_TRANSLATION,
     LIDAR_FRAME,
@@ -167,6 +169,8 @@ def setup_camera_graph(sample):
                     ("ROS2Context.inputs:domain_id", domain_id),
                     ("RenderProduct.inputs:cameraPrim", [FRONT_CAMERA_PRIM_PATH]),
                     ("RenderProduct.inputs:enabled", True),
+                    ("RenderProduct.inputs:width", FRONT_CAMERA_RENDER_WIDTH),
+                    ("RenderProduct.inputs:height", FRONT_CAMERA_RENDER_HEIGHT),
                     ("CameraHelperRgb.inputs:frameId", FRONT_CAM_FRAME),
                     ("CameraHelperRgb.inputs:topicName", COLOR_IMAGE_TOPIC),
                     ("CameraHelperRgb.inputs:type", "rgb"),
@@ -182,7 +186,10 @@ def setup_camera_graph(sample):
         print(f"[cobot3.spot]   {COLOR_IMAGE_TOPIC}")
         print(f"[cobot3.spot]   {DEPTH_IMAGE_TOPIC}")
         print(f"[cobot3.spot]   {CAMERA_INFO_TOPIC}")
-        print(f"[cobot3.spot]   frame_id={FRONT_CAM_FRAME}")
+        print(
+            f"[cobot3.spot]   frame_id={FRONT_CAM_FRAME}, "
+            f"resolution={FRONT_CAMERA_RENDER_WIDTH}x{FRONT_CAMERA_RENDER_HEIGHT}"
+        )
     except Exception as exc:
         print(f"[cobot3.spot] ❌ Camera graph 생성 실패: {exc}")
         traceback.print_exc()
