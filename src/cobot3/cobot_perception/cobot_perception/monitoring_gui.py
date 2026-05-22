@@ -6,24 +6,57 @@ Layout
     +---------------------------+----------------------------+
     |  YOLO annotated camera    |  2D top-down map view      |
     |  (Image)                  |  (SLAM map + camera        |
-    |                           |   coverage + robot + goal) |
+    |                           |   coverage + robot +       |
+    |                           |   survivor markers)        |
     +---------------------------+----------------------------+
-    |               Progress / status panel                  |
-    |  Current zone, waypoint progress, camera coverage %,   |
-    |  detected survivor count, list of survivor poses.      |
-    +--------------------------------------------------------+
+    |  Status panel             |  Survivor list + captures  |
+    |  - elapsed time           |  - detected survivor count |
+    |  - current zone           |  - survivor pose list      |
+    |  - waypoint progress      |  - delete survivor button  |
+    |  - camera coverage %      |  - latest survivor image   |
+    +---------------------------+----------------------------+
 
 Topics consumed
 ---------------
     /spot_0/yolo/annotated_image  sensor_msgs/Image
-    /map                          nav_msgs/OccupancyGrid (SLAM)
-    /global_costmap/costmap        nav_msgs/OccupancyGrid (Nav2 global cost)
-    /camera_coverage              nav_msgs/OccupancyGrid (tracker)
+        YOLO annotated RGB image displayed in the camera panel.
+
+    /map                          nav_msgs/OccupancyGrid
+        SLAM occupancy grid used as the base map for the top-down view.
+
+    /camera_coverage              nav_msgs/OccupancyGrid
+        Camera coverage grid overlaid on the SLAM map.
+
     /coverage_zones               visualization_msgs/MarkerArray
+        Coverage zone markers. The current zone is inferred from the
+        green TEXT_VIEW_FACING marker.
+
     /coverage_waypoints           visualization_msgs/MarkerArray
-    /detected_survivor_pose       geometry_msgs/PoseStamped (one shot per
-                                  survivor; we keep a list)
+        Coverage waypoint markers. Gray markers are treated as visited
+        waypoints for progress calculation.
+
+    /detected_survivor_pose       geometry_msgs/PoseStamped
+        One-shot survivor pose in the map frame. The GUI keeps a local
+        deduplicated list using a 0.5 m distance threshold.
+
     TF: map -> spot_0/base_link
+        Robot position used for drawing the robot marker on the map.
+
+Topics published
+----------------
+    /survivor_delete_id           std_msgs/Int32
+        Survivor delete request from the GUI.
+        - 0 clears all local survivor records.
+        - positive ID deletes the matching survivor.
+
+Image files
+-----------
+    The latest survivor capture is loaded from survivor_*.jpg/jpeg/png files.
+    Search order:
+        1. $COBOT_SURVIVOR_CAPTURE_DIR
+        2. ./src/yolo/dectected_person
+        3. ~/dev_ws/cobot3/src/yolo/dectected_person
+        4. /home/rokey/dev_ws/cobot3/src/yolo/dectected_person
 """
 
 from __future__ import annotations
