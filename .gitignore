@@ -38,3 +38,14 @@ src/cobot3/cobot_core/test_commands/*.json
 
 # maps 폴더
 maps/
+
+# YOLO 객체 감지 결과 이미지
+src/yolo/dectected_person/*.jpg
+src/yolo/dectected_person/*.jpeg
+src/yolo/dectected_person/*.png
+src/yolo/dectected_person/*.JPG
+src/yolo/dectected_person/*.JPEG
+src/yolo/dectected_person/*.PNG
+
+# .agent 파일
+*.agent

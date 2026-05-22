@@ -17,6 +17,7 @@ ROS2 package `yolo` detects people from the Spot front RGB-D camera, publishes a
 | `/spot_0/yolo/person_detected` | `std_msgs/Bool` | Person detection flag |
 | `/spot_0/yolo/person_pose_base` | `geometry_msgs/PoseStamped` | Person pose in `spot_0/base_link` |
 | `/detected_survivor_pose` | `geometry_msgs/PoseStamped` | Survivor pose in `map` |
+| `/survivor_delete_id` | `std_msgs/Int32` | Delete survivor by ID; `0` clears all survivors |
 | `/survivor_goal_marker` | `visualization_msgs/Marker` | Survivor marker for RViz2 |
 
 ## Run
@@ -31,6 +32,20 @@ The full exploration pipeline starts this package from `cobot_perception`:
 ```bash
 source /home/rokey/dev_ws/cobot3/install/setup.bash
 ros2 launch cobot_perception spot_explore.launch.py
+```
+
+## Manual Delete
+
+Delete survivor marker and detector memory for survivor `#2`:
+
+```bash
+ros2 topic pub --once /survivor_delete_id std_msgs/msg/Int32 "{data: 2}"
+```
+
+Clear all survivor markers and detector memory:
+
+```bash
+ros2 topic pub --once /survivor_delete_id std_msgs/msg/Int32 "{data: 0}"
 ```
 
 ## Files

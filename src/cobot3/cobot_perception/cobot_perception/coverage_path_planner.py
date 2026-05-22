@@ -471,6 +471,7 @@ class CoveragePathPlanner(Node):
         clear.header.frame_id = self._map_frame
         clear.header.stamp = self.get_clock().now().to_msg()
         clear.ns = 'coverage_zones'
+        clear.pose.orientation.w = 1.0
         clear.action = Marker.DELETEALL
         ma.markers.append(clear)
 
@@ -538,6 +539,7 @@ class CoveragePathPlanner(Node):
         clear.header.frame_id = self._map_frame
         clear.header.stamp = self.get_clock().now().to_msg()
         clear.ns = 'coverage_waypoints'
+        clear.pose.orientation.w = 1.0
         clear.action = Marker.DELETEALL
         ma.markers.append(clear)
 
