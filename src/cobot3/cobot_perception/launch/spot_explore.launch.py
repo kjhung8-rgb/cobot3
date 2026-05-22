@@ -10,7 +10,7 @@
 #   7. survivor_pose_to_marker (PoseStamped -> RViz X; 테스트: ros2 topic pub --once ...)
 #   8. RViz with combined view
 #
-# Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,front_cam/*}.
+# Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,*_cam/*}.
 
 import os
 import tempfile
@@ -131,6 +131,20 @@ def generate_launch_description():
                         output="screen",
                         parameters=[
                             {"use_sim_time": use_sim_time},
+                            {
+                                "camera_frames": [
+                                    "spot_0/front_cam_link",
+                                    "spot_0/left_cam_link",
+                                    "spot_0/right_cam_link",
+                                ],
+                            },
+                            {
+                                "camera_info_topics": [
+                                    "/spot_0/front_cam/camera_info",
+                                    "/spot_0/left_cam/camera_info",
+                                    "/spot_0/right_cam/camera_info",
+                                ],
+                            },
                             # 4 m: matches waypoint spacing in CPP, faster
                             # coverage growth, fewer waypoints to visit.
                             {"max_range_m": 4.0},

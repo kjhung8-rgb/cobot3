@@ -4,6 +4,24 @@ yolo_detector:
     depth_topic: /spot_0/front_cam/depth_image
     camera_info_topic: /spot_0/front_cam/camera_info
     annotated_topic: /spot_0/yolo/annotated_image
+    multi_camera: true
+    camera_names: [front, left, right]
+    image_topics:
+      - /spot_0/front_cam/color_image
+      - /spot_0/left_cam/color_image
+      - /spot_0/right_cam/color_image
+    depth_topics:
+      - /spot_0/front_cam/depth_image
+      - /spot_0/left_cam/depth_image
+      - /spot_0/right_cam/depth_image
+    camera_info_topics:
+      - /spot_0/front_cam/camera_info
+      - /spot_0/left_cam/camera_info
+      - /spot_0/right_cam/camera_info
+    annotated_topics:
+      - /spot_0/yolo/annotated_image
+      - /spot_0/yolo/left_annotated_image
+      - /spot_0/yolo/right_annotated_image
     detected_topic: /spot_0/yolo/person_detected
     base_pose_topic: /spot_0/yolo/person_pose_base
     survivor_pose_topic: /detected_survivor_pose

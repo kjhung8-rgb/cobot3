@@ -19,10 +19,8 @@ import omni.timeline
 import omni.ui as ui
 
 from .constants import (
-    CAMERA_INFO_TOPIC,
+    CAMERA_SPECS,
     CMD_VEL_TOPIC,
-    COLOR_IMAGE_TOPIC,
-    DEPTH_IMAGE_TOPIC,
     ODOM_TOPIC,
     SCAN_TOPIC,
 )
@@ -40,7 +38,7 @@ class Cobot3SpotExtension(omni.ext.IExt):
         self._sample = None
         self._teleop = TeleopLauncher()
 
-        self._window = ui.Window("Cobot3 Spot - Fire Rescue", width=440, height=500)
+        self._window = ui.Window("Cobot3 Spot - Fire Rescue", width=520, height=620)
         with self._window.frame:
             with ui.VStack(spacing=6):
                 ui.Label("🔥 Cobot3 Spot - Fire Rescue", style={"font_size": 16})
@@ -65,9 +63,10 @@ class Cobot3SpotExtension(omni.ext.IExt):
                 ui.Label(CMD_VEL_TOPIC, style={"font_size": 11})
                 ui.Label(SCAN_TOPIC, style={"font_size": 11})
                 ui.Label(ODOM_TOPIC, style={"font_size": 11})
-                ui.Label(COLOR_IMAGE_TOPIC, style={"font_size": 11})
-                ui.Label(DEPTH_IMAGE_TOPIC, style={"font_size": 11})
-                ui.Label(CAMERA_INFO_TOPIC, style={"font_size": 11})
+                for spec in CAMERA_SPECS:
+                    ui.Label(f"{spec['label']} RGB: {spec['color_topic']}", style={"font_size": 11})
+                    ui.Label(f"{spec['label']} DEPTH: {spec['depth_topic']}", style={"font_size": 11})
+                    ui.Label(f"{spec['label']} INFO: {spec['camera_info_topic']}", style={"font_size": 11})
 
         print("[cobot3.spot] UI 준비 완료")
 

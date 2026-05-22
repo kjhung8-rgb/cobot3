@@ -1,4 +1,4 @@
-"""YOLOv8 survivor detector and RGB-D localizer for the Spot front camera."""
+"""YOLOv8 survivor detector and RGB-D localizer for Spot cameras."""
 
 from __future__ import annotations
 
@@ -41,6 +41,23 @@ class SurvivorCandidate:
     samples: list[tuple[float, float, float]]
 
 
+@dataclass
+class CameraStream:
+    name: str
+    image_topic: str
+    depth_topic: str
+    camera_info_topic: str
+    annotated_topic: str
+    camera_info: Optional[CameraInfo] = None
+    image_sub: object = None
+    depth_sub: object = None
+    sync: object = None
+    pub_image: object = None
+    last_inference_time: object = None
+    last_annotated_pub_time: object = None
+    last_pose_pub_time: object = None
+
+
 class SurvivorDetector(Node):
     def __init__(self):
         super().__init__("yolo_detector")
@@ -50,6 +67,12 @@ class SurvivorDetector(Node):
         self.declare_parameter("depth_topic", "/spot_0/front_cam/depth_image")
         self.declare_parameter("camera_info_topic", "/spot_0/front_cam/camera_info")
         self.declare_parameter("annotated_topic", "/spot_0/yolo/annotated_image")
+        self.declare_parameter("multi_camera", False)
+        self.declare_parameter("camera_names", ["front"])
+        self.declare_parameter("image_topics", ["/spot_0/front_cam/color_image"])
+        self.declare_parameter("depth_topics", ["/spot_0/front_cam/depth_image"])
+        self.declare_parameter("camera_info_topics", ["/spot_0/front_cam/camera_info"])
+        self.declare_parameter("annotated_topics", ["/spot_0/yolo/annotated_image"])
         self.declare_parameter("detected_topic", "/spot_0/yolo/person_detected")
         self.declare_parameter("base_pose_topic", "/spot_0/yolo/person_pose_base")
         self.declare_parameter("survivor_pose_topic", "/detected_survivor_pose")
@@ -93,6 +116,7 @@ class SurvivorDetector(Node):
         depth_topic = self.get_parameter("depth_topic").value
         camera_info_topic = self.get_parameter("camera_info_topic").value
         annotated_topic = self.get_parameter("annotated_topic").value
+        multi_camera = bool(self.get_parameter("multi_camera").value)
         detected_topic = self.get_parameter("detected_topic").value
         base_pose_topic = self.get_parameter("base_pose_topic").value
         survivor_pose_topic = self.get_parameter("survivor_pose_topic").value
@@ -159,12 +183,18 @@ class SurvivorDetector(Node):
         )
 
         self.bridge = CvBridge()
-        self.camera_info: Optional[CameraInfo] = None
-        self._last_inference_time = self.get_clock().now() - Duration(seconds=9999.0)
-        self._last_annotated_pub_time = self.get_clock().now() - Duration(
-            seconds=9999.0
+        self.camera_streams = self._build_camera_streams(
+            multi_camera,
+            image_topic,
+            depth_topic,
+            camera_info_topic,
+            annotated_topic,
         )
-        self._last_pose_pub_time = self.get_clock().now() - Duration(seconds=9999.0)
+        old_time = self.get_clock().now() - Duration(seconds=9999.0)
+        for stream in self.camera_streams:
+            stream.last_inference_time = old_time
+            stream.last_annotated_pub_time = old_time
+            stream.last_pose_pub_time = old_time
         self._last_capture_time = self.get_clock().now() - Duration(seconds=9999.0)
         self._frame_count = 0
         self._capture_count = 0
@@ -207,23 +237,38 @@ class SurvivorDetector(Node):
             depth=1,
         )
 
-        self.image_sub = message_filters.Subscriber(
-            self, Image, image_topic, qos_profile=sensor_qos
-        )
-        self.depth_sub = message_filters.Subscriber(
-            self, Image, depth_topic, qos_profile=sensor_qos
-        )
-        self.sync = message_filters.ApproximateTimeSynchronizer(
-            [self.image_sub, self.depth_sub],
-            queue_size=int(self.get_parameter("sync_queue_size").value),
-            slop=float(self.get_parameter("sync_slop_sec").value),
-        )
-        self.sync.registerCallback(self._on_rgbd)
+        self.camera_info_subs = []
+        for stream in self.camera_streams:
+            stream.image_sub = message_filters.Subscriber(
+                self, Image, stream.image_topic, qos_profile=sensor_qos
+            )
+            stream.depth_sub = message_filters.Subscriber(
+                self, Image, stream.depth_topic, qos_profile=sensor_qos
+            )
+            stream.sync = message_filters.ApproximateTimeSynchronizer(
+                [stream.image_sub, stream.depth_sub],
+                queue_size=int(self.get_parameter("sync_queue_size").value),
+                slop=float(self.get_parameter("sync_slop_sec").value),
+            )
+            stream.sync.registerCallback(
+                lambda image_msg, depth_msg, camera_stream=stream: self._on_rgbd(
+                    camera_stream, image_msg, depth_msg
+                )
+            )
+            self.camera_info_subs.append(
+                self.create_subscription(
+                    CameraInfo,
+                    stream.camera_info_topic,
+                    lambda msg, camera_stream=stream: self._on_camera_info(
+                        camera_stream, msg
+                    ),
+                    reliable_qos,
+                )
+            )
+            stream.pub_image = self.create_publisher(
+                Image, stream.annotated_topic, annotated_qos
+            )
 
-        self.create_subscription(
-            CameraInfo, camera_info_topic, self._on_camera_info, reliable_qos
-        )
-        self.pub_image = self.create_publisher(Image, annotated_topic, annotated_qos)
         self.pub_detected = self.create_publisher(Bool, detected_topic, 10)
         self.pub_base_pose = self.create_publisher(PoseStamped, base_pose_topic, 10)
         self.pub_survivor_pose = self.create_publisher(
@@ -236,14 +281,22 @@ class SurvivorDetector(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.get_logger().info(
-            "subscribed rgb=%s depth=%s camera_info=%s; publishing annotated=%s "
-            "detected=%s base_pose=%s survivor_pose=%s target_frame=%s delete_topic=%s"
+        camera_summary = "; ".join(
+            "%s(rgb=%s depth=%s info=%s annotated=%s)"
             % (
-                image_topic,
-                depth_topic,
-                camera_info_topic,
-                annotated_topic,
+                stream.name,
+                stream.image_topic,
+                stream.depth_topic,
+                stream.camera_info_topic,
+                stream.annotated_topic,
+            )
+            for stream in self.camera_streams
+        )
+        self.get_logger().info(
+            "subscribed cameras=%s; publishing detected=%s base_pose=%s "
+            "survivor_pose=%s target_frame=%s delete_topic=%s"
+            % (
+                camera_summary,
                 detected_topic,
                 base_pose_topic,
                 survivor_pose_topic,
@@ -252,13 +305,65 @@ class SurvivorDetector(Node):
             )
         )
 
-    def _on_camera_info(self, msg: CameraInfo):
-        self.camera_info = msg
+    def _build_camera_streams(
+        self,
+        multi_camera: bool,
+        image_topic: str,
+        depth_topic: str,
+        camera_info_topic: str,
+        annotated_topic: str,
+    ) -> list[CameraStream]:
+        if not multi_camera:
+            return [
+                CameraStream(
+                    name="front",
+                    image_topic=image_topic,
+                    depth_topic=depth_topic,
+                    camera_info_topic=camera_info_topic,
+                    annotated_topic=annotated_topic,
+                )
+            ]
 
-    def _on_rgbd(self, image_msg: Image, depth_msg: Image):
-        if not self._period_due(self._last_inference_time, self.inference_period):
+        names = self._string_list_parameter("camera_names")
+        image_topics = self._string_list_parameter("image_topics")
+        depth_topics = self._string_list_parameter("depth_topics")
+        camera_info_topics = self._string_list_parameter("camera_info_topics")
+        annotated_topics = self._string_list_parameter("annotated_topics")
+
+        counts = {
+            "camera_names": len(names),
+            "image_topics": len(image_topics),
+            "depth_topics": len(depth_topics),
+            "camera_info_topics": len(camera_info_topics),
+            "annotated_topics": len(annotated_topics),
+        }
+        if not names or len(set(counts.values())) != 1:
+            raise ValueError(f"multi_camera parameter lengths must match: {counts}")
+
+        return [
+            CameraStream(
+                name=names[i],
+                image_topic=image_topics[i],
+                depth_topic=depth_topics[i],
+                camera_info_topic=camera_info_topics[i],
+                annotated_topic=annotated_topics[i],
+            )
+            for i in range(len(names))
+        ]
+
+    def _string_list_parameter(self, name: str) -> list[str]:
+        value = self.get_parameter(name).value
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return [str(part) for part in value]
+
+    def _on_camera_info(self, stream: CameraStream, msg: CameraInfo):
+        stream.camera_info = msg
+
+    def _on_rgbd(self, stream: CameraStream, image_msg: Image, depth_msg: Image):
+        if not self._period_due(stream.last_inference_time, self.inference_period):
             return
-        self._last_inference_time = self.get_clock().now()
+        stream.last_inference_time = self.get_clock().now()
 
         try:
             frame = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
@@ -268,7 +373,7 @@ class SurvivorDetector(Node):
             return
 
         result = self._predict(frame)
-        self._publish_annotated(result, image_msg.header)
+        self._publish_annotated(stream, result, image_msg.header)
 
         boxes = [] if result.boxes is None else list(result.boxes)
         det_msg = Bool()
@@ -278,14 +383,18 @@ class SurvivorDetector(Node):
         self._frame_count += 1
         if not boxes:
             if self._frame_count % 30 == 0:
-                self.get_logger().info(f"frame {self._frame_count}: no survivor")
+                self.get_logger().info(
+                    f"{stream.name} frame {self._frame_count}: no survivor"
+                )
             return
 
-        if self.camera_info is None:
-            self.get_logger().warn("No CameraInfo yet; cannot localize survivor")
+        if stream.camera_info is None:
+            self.get_logger().warn(
+                f"No CameraInfo yet for {stream.name}; cannot localize survivor"
+            )
             return
 
-        if not self._pose_publish_due():
+        if not self._pose_publish_due(stream):
             return
 
         candidates = self._localizable_boxes(boxes, depth, depth_msg.encoding)
@@ -293,12 +402,17 @@ class SurvivorDetector(Node):
             self.get_logger().warn("Detected person, but no valid person-depth sample")
             return
 
-        self._last_pose_pub_time = self.get_clock().now()
+        stream.last_pose_pub_time = self.get_clock().now()
         frame_targets: list[PoseStamped] = []
 
         for box, u, v, depth_m in candidates:
             camera_point = self._pixel_depth_to_camera_point(
-                u, v, depth_m, image_msg.header.frame_id, image_msg.header.stamp
+                stream.camera_info,
+                u,
+                v,
+                depth_m,
+                image_msg.header.frame_id,
+                image_msg.header.stamp,
             )
             base_pose = self._transform_point_to_pose(camera_point, self.base_frame)
             if base_pose is None:
@@ -324,17 +438,18 @@ class SurvivorDetector(Node):
 
             self.pub_survivor_pose.publish(target_pose)
             self._save_detection_capture(
-                frame, result, survivor_id=survivor_id, force=True
+                stream, frame, result, survivor_id=survivor_id, force=True
             )
 
             conf = float(box.conf[0])
             bp = base_pose.pose.position
             tp = target_pose.pose.position
             self.get_logger().info(
-                "new survivor #%d conf=%.2f depth=%.2fm pixel=(%d,%d) "
+                "new survivor #%d camera=%s conf=%.2f depth=%.2fm pixel=(%d,%d) "
                 "base=(%.2f, %.2f, %.2f) %s=(%.2f, %.2f, %.2f)"
                 % (
                     survivor_id,
+                    stream.name,
                     conf,
                     depth_m,
                     u,
@@ -360,19 +475,24 @@ class SurvivorDetector(Node):
             verbose=False,
         )[0]
 
-    def _publish_annotated(self, result, header):
-        if self.pub_image.get_subscription_count() == 0:
+    def _publish_annotated(self, stream: CameraStream, result, header):
+        if stream.pub_image.get_subscription_count() == 0:
             return
-        if not self._period_due(self._last_annotated_pub_time, self.annotated_period):
+        if not self._period_due(stream.last_annotated_pub_time, self.annotated_period):
             return
         annotated = result.plot()
         out_msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
         out_msg.header = header
-        self.pub_image.publish(out_msg)
-        self._last_annotated_pub_time = self.get_clock().now()
+        stream.pub_image.publish(out_msg)
+        stream.last_annotated_pub_time = self.get_clock().now()
 
     def _save_detection_capture(
-        self, frame, result, survivor_id: int | None = None, force=False
+        self,
+        stream: CameraStream,
+        frame,
+        result,
+        survivor_id: int | None = None,
+        force=False,
     ):
         if not self.save_detection_images:
             return
@@ -382,7 +502,11 @@ class SurvivorDetector(Node):
         image = result.plot() if self.capture_annotated else frame
         now = self.get_clock().now()
         self._capture_count += 1
-        prefix = f"survivor_{survivor_id:03d}" if survivor_id is not None else "person"
+        prefix = (
+            f"survivor_{survivor_id:03d}_{stream.name}"
+            if survivor_id is not None
+            else f"person_{stream.name}"
+        )
         capture_path = self.capture_dir / (
             f"{prefix}_{now.nanoseconds}_{self._capture_count:06d}.jpg"
         )
@@ -594,8 +718,8 @@ class SurvivorDetector(Node):
         elapsed = self.get_clock().now() - last_time
         return elapsed.nanoseconds >= int(period_sec * 1e9)
 
-    def _pose_publish_due(self) -> bool:
-        return self._period_due(self._last_pose_pub_time, self.pose_period)
+    def _pose_publish_due(self, stream: CameraStream) -> bool:
+        return self._period_due(stream.last_pose_pub_time, self.pose_period)
 
     def _localizable_boxes(self, boxes, depth, encoding):
         localized = []
@@ -683,9 +807,15 @@ class SurvivorDetector(Node):
         return us, ue, vs, ve
 
     def _pixel_depth_to_camera_point(
-        self, u: int, v: int, depth_m: float, frame_id: str, stamp
+        self,
+        camera_info: CameraInfo,
+        u: int,
+        v: int,
+        depth_m: float,
+        frame_id: str,
+        stamp,
     ) -> PointStamped:
-        k = self.camera_info.k
+        k = camera_info.k
         fx, fy = float(k[0]), float(k[4])
         cx, cy = float(k[2]), float(k[5])
 
@@ -694,7 +824,7 @@ class SurvivorDetector(Node):
         z_opt = depth_m
 
         p = PointStamped()
-        p.header.frame_id = frame_id or self.camera_info.header.frame_id
+        p.header.frame_id = frame_id or camera_info.header.frame_id
         p.header.stamp = stamp
 
         if self.optical_to_camera_link:

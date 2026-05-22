@@ -21,20 +21,14 @@ from pxr import Gf, UsdGeom
 from .constants import (
     BASE_LINK_FRAME,
     CAMERA_GRAPH_PATH,
-    CAMERA_INFO_TOPIC,
+    CAMERA_SPECS,
     CMD_VEL_GRAPH_PATH,
     CMD_VEL_TOPIC,
     CMD_VEL_TO_POLICY_ANGULAR_Z_SCALE,
     CMD_VEL_TO_POLICY_LINEAR_X_SCALE,
     CMD_VEL_TO_POLICY_LINEAR_Y_SCALE,
-    COLOR_IMAGE_TOPIC,
-    DEPTH_IMAGE_TOPIC,
-    FRONT_CAM_FRAME,
-    FRONT_CAMERA_PRIM_PATH,
     FRONT_CAMERA_RENDER_HEIGHT,
     FRONT_CAMERA_RENDER_WIDTH,
-    FRONT_CAMERA_TF_ROTATION_XYZW,
-    FRONT_CAMERA_TRANSLATION,
     LIDAR_FRAME,
     LIDAR_PRIM_PATH,
     ODOM_FRAME,
@@ -125,8 +119,12 @@ def setup_cmd_vel_graph(sample):
 # ─────────────────────────────────────────────
 # Camera publishers
 # ─────────────────────────────────────────────
+def _node_suffix(name: str) -> str:
+    return "".join(part.capitalize() for part in name.split("_"))
+
+
 def setup_camera_graph(sample):
-    """Publish RGB/depth/camera_info under /spot_0/front_cam/*."""
+    """Publish RGB/depth/camera_info for all Spot cameras."""
     if sample is None:
         print("[cobot3.spot] Load Scene 먼저 클릭하세요!")
         return
@@ -139,56 +137,77 @@ def setup_camera_graph(sample):
         stage.RemovePrim(graph_path)
 
     keys = og.Controller.Keys
+    create_nodes = [
+        ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+        ("ROS2Context", "isaacsim.ros2.bridge.ROS2Context"),
+    ]
+    connections = []
+    set_values = [("ROS2Context.inputs:domain_id", domain_id)]
+
+    for spec in CAMERA_SPECS:
+        suffix = _node_suffix(spec["name"])
+        render = f"RenderProduct{suffix}"
+        rgb = f"CameraHelperRgb{suffix}"
+        depth = f"CameraHelperDepth{suffix}"
+        info = f"CameraInfoHelper{suffix}"
+
+        create_nodes.extend(
+            [
+                (render, "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                (rgb, "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                (depth, "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                # camera_info는 ROS2CameraHelper type='camera_info'가 아니라
+                # 전용 ROS2CameraInfoHelper를 써야 한다.
+                (info, "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
+            ]
+        )
+        connections.extend(
+            [
+                ("OnPlaybackTick.outputs:tick", f"{render}.inputs:execIn"),
+                (f"{render}.outputs:execOut", f"{rgb}.inputs:execIn"),
+                (f"{render}.outputs:execOut", f"{depth}.inputs:execIn"),
+                (f"{render}.outputs:execOut", f"{info}.inputs:execIn"),
+                ("ROS2Context.outputs:context", f"{rgb}.inputs:context"),
+                ("ROS2Context.outputs:context", f"{depth}.inputs:context"),
+                ("ROS2Context.outputs:context", f"{info}.inputs:context"),
+                (f"{render}.outputs:renderProductPath", f"{rgb}.inputs:renderProductPath"),
+                (f"{render}.outputs:renderProductPath", f"{depth}.inputs:renderProductPath"),
+                (f"{render}.outputs:renderProductPath", f"{info}.inputs:renderProductPath"),
+            ]
+        )
+        set_values.extend(
+            [
+                (f"{render}.inputs:cameraPrim", [spec["prim_path"]]),
+                (f"{render}.inputs:enabled", True),
+                (f"{render}.inputs:width", FRONT_CAMERA_RENDER_WIDTH),
+                (f"{render}.inputs:height", FRONT_CAMERA_RENDER_HEIGHT),
+                (f"{rgb}.inputs:frameId", spec["frame"]),
+                (f"{rgb}.inputs:topicName", spec["color_topic"]),
+                (f"{rgb}.inputs:type", "rgb"),
+                (f"{depth}.inputs:frameId", spec["frame"]),
+                (f"{depth}.inputs:topicName", spec["depth_topic"]),
+                (f"{depth}.inputs:type", "depth"),
+                (f"{info}.inputs:frameId", spec["frame"]),
+                (f"{info}.inputs:topicName", spec["camera_info_topic"]),
+            ]
+        )
+
     try:
         og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
-                keys.CREATE_NODES: [
-                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
-                    ("ROS2Context", "isaacsim.ros2.bridge.ROS2Context"),
-                    ("RenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
-                    ("CameraHelperRgb", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-                    ("CameraHelperDepth", "isaacsim.ros2.bridge.ROS2CameraHelper"),
-                    # camera_info는 ROS2CameraHelper type='camera_info'가 아니라
-                    # 전용 ROS2CameraInfoHelper를 써야 한다.
-                    ("CameraInfoHelper", "isaacsim.ros2.bridge.ROS2CameraInfoHelper"),
-                ],
-                keys.CONNECT: [
-                    ("OnPlaybackTick.outputs:tick", "RenderProduct.inputs:execIn"),
-                    ("RenderProduct.outputs:execOut", "CameraHelperRgb.inputs:execIn"),
-                    ("RenderProduct.outputs:execOut", "CameraHelperDepth.inputs:execIn"),
-                    ("RenderProduct.outputs:execOut", "CameraInfoHelper.inputs:execIn"),
-                    ("ROS2Context.outputs:context", "CameraHelperRgb.inputs:context"),
-                    ("ROS2Context.outputs:context", "CameraHelperDepth.inputs:context"),
-                    ("ROS2Context.outputs:context", "CameraInfoHelper.inputs:context"),
-                    ("RenderProduct.outputs:renderProductPath", "CameraHelperRgb.inputs:renderProductPath"),
-                    ("RenderProduct.outputs:renderProductPath", "CameraHelperDepth.inputs:renderProductPath"),
-                    ("RenderProduct.outputs:renderProductPath", "CameraInfoHelper.inputs:renderProductPath"),
-                ],
-                keys.SET_VALUES: [
-                    ("ROS2Context.inputs:domain_id", domain_id),
-                    ("RenderProduct.inputs:cameraPrim", [FRONT_CAMERA_PRIM_PATH]),
-                    ("RenderProduct.inputs:enabled", True),
-                    ("RenderProduct.inputs:width", FRONT_CAMERA_RENDER_WIDTH),
-                    ("RenderProduct.inputs:height", FRONT_CAMERA_RENDER_HEIGHT),
-                    ("CameraHelperRgb.inputs:frameId", FRONT_CAM_FRAME),
-                    ("CameraHelperRgb.inputs:topicName", COLOR_IMAGE_TOPIC),
-                    ("CameraHelperRgb.inputs:type", "rgb"),
-                    ("CameraHelperDepth.inputs:frameId", FRONT_CAM_FRAME),
-                    ("CameraHelperDepth.inputs:topicName", DEPTH_IMAGE_TOPIC),
-                    ("CameraHelperDepth.inputs:type", "depth"),
-                    ("CameraInfoHelper.inputs:frameId", FRONT_CAM_FRAME),
-                    ("CameraInfoHelper.inputs:topicName", CAMERA_INFO_TOPIC),
-                ],
+                keys.CREATE_NODES: create_nodes,
+                keys.CONNECT: connections,
+                keys.SET_VALUES: set_values,
             },
         )
         print("[cobot3.spot] ✅ Camera graph 생성")
-        print(f"[cobot3.spot]   {COLOR_IMAGE_TOPIC}")
-        print(f"[cobot3.spot]   {DEPTH_IMAGE_TOPIC}")
-        print(f"[cobot3.spot]   {CAMERA_INFO_TOPIC}")
+        for spec in CAMERA_SPECS:
+            print(f"[cobot3.spot]   {spec['label']} RGB: {spec['color_topic']}")
+            print(f"[cobot3.spot]   {spec['label']} DEPTH: {spec['depth_topic']}")
+            print(f"[cobot3.spot]   {spec['label']} INFO: {spec['camera_info_topic']}")
         print(
-            f"[cobot3.spot]   frame_id={FRONT_CAM_FRAME}, "
-            f"resolution={FRONT_CAMERA_RENDER_WIDTH}x{FRONT_CAMERA_RENDER_HEIGHT}"
+            f"[cobot3.spot]   resolution={FRONT_CAMERA_RENDER_WIDTH}x{FRONT_CAMERA_RENDER_HEIGHT}"
         )
     except Exception as exc:
         print(f"[cobot3.spot] ❌ Camera graph 생성 실패: {exc}")
@@ -275,6 +294,28 @@ def setup_slam_sensors(sample):
         stage.RemovePrim(SLAM_GRAPH_PATH)
 
     keys = og.Controller.Keys
+    camera_tf_nodes = []
+    camera_tf_exec_connections = []
+    camera_tf_context_connections = []
+    camera_tf_time_connections = []
+    camera_tf_set_values = []
+    for spec in CAMERA_SPECS:
+        node = f"PublishCameraStaticTf{_node_suffix(spec['name'])}"
+        camera_tf_nodes.append((node, "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"))
+        camera_tf_exec_connections.append(("ComputeOdometry.outputs:execOut", f"{node}.inputs:execIn"))
+        camera_tf_context_connections.append(("ROS2Context.outputs:context", f"{node}.inputs:context"))
+        camera_tf_time_connections.append(("ReadSystemTime.outputs:systemTime", f"{node}.inputs:timeStamp"))
+        camera_tf_set_values.extend(
+            [
+                (f"{node}.inputs:topicName", "/tf_static"),
+                (f"{node}.inputs:staticPublisher", True),
+                (f"{node}.inputs:parentFrameId", BASE_LINK_FRAME),
+                (f"{node}.inputs:childFrameId", spec["frame"]),
+                (f"{node}.inputs:translation", list(spec["translation"])),
+                (f"{node}.inputs:rotation", list(spec["tf_rotation_xyzw"])),
+            ]
+        )
+
     try:
         og.Controller.edit(
             {"graph_path": SLAM_GRAPH_PATH, "evaluator_name": "execution"},
@@ -295,7 +336,7 @@ def setup_slam_sensors(sample):
                     # TF: odom -> base_link, base_link -> sensors
                     ("PublishOdomTf", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
                     ("PublishLidarStaticTf", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
-                    ("PublishCameraStaticTf", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
+                    *camera_tf_nodes,
                 ],
                 keys.CONNECT: [
                     # Execution
@@ -304,7 +345,7 @@ def setup_slam_sensors(sample):
                     ("ComputeOdometry.outputs:execOut", "PublishOdometry.inputs:execIn"),
                     ("ComputeOdometry.outputs:execOut", "PublishOdomTf.inputs:execIn"),
                     ("ComputeOdometry.outputs:execOut", "PublishLidarStaticTf.inputs:execIn"),
-                    ("ComputeOdometry.outputs:execOut", "PublishCameraStaticTf.inputs:execIn"),
+                    *camera_tf_exec_connections,
                     ("CreateLidarRenderProduct.outputs:execOut", "LidarHelper.inputs:execIn"),
 
                     # ROS2 context
@@ -312,13 +353,13 @@ def setup_slam_sensors(sample):
                     ("ROS2Context.outputs:context", "PublishOdometry.inputs:context"),
                     ("ROS2Context.outputs:context", "PublishOdomTf.inputs:context"),
                     ("ROS2Context.outputs:context", "PublishLidarStaticTf.inputs:context"),
-                    ("ROS2Context.outputs:context", "PublishCameraStaticTf.inputs:context"),
+                    *camera_tf_context_connections,
 
                     # Timestamps
                     ("ReadSystemTime.outputs:systemTime", "PublishOdometry.inputs:timeStamp"),
                     ("ReadSystemTime.outputs:systemTime", "PublishOdomTf.inputs:timeStamp"),
                     ("ReadSystemTime.outputs:systemTime", "PublishLidarStaticTf.inputs:timeStamp"),
-                    ("ReadSystemTime.outputs:systemTime", "PublishCameraStaticTf.inputs:timeStamp"),
+                    *camera_tf_time_connections,
 
                     # LiDAR render product
                     ("CreateLidarRenderProduct.outputs:renderProductPath", "LidarHelper.inputs:renderProductPath"),
@@ -364,13 +405,8 @@ def setup_slam_sensors(sample):
                     ("PublishLidarStaticTf.inputs:translation", list(LIDAR_TRANSLATION)),
                     ("PublishLidarStaticTf.inputs:rotation", LIDAR_TF_ROTATION_XYZW),
 
-                    # /tf_static: spot_0/base_link -> spot_0/front_cam_link
-                    ("PublishCameraStaticTf.inputs:topicName", "/tf_static"),
-                    ("PublishCameraStaticTf.inputs:staticPublisher", True),
-                    ("PublishCameraStaticTf.inputs:parentFrameId", BASE_LINK_FRAME),
-                    ("PublishCameraStaticTf.inputs:childFrameId", FRONT_CAM_FRAME),
-                    ("PublishCameraStaticTf.inputs:translation", list(FRONT_CAMERA_TRANSLATION)),
-                    ("PublishCameraStaticTf.inputs:rotation", list(FRONT_CAMERA_TF_ROTATION_XYZW)),
+                    # /tf_static: spot_0/base_link -> spot_0/*_cam_link
+                    *camera_tf_set_values,
                 ],
             },
         )
@@ -380,7 +416,8 @@ def setup_slam_sensors(sample):
         print(f"[cobot3.spot]   {ODOM_TOPIC}: frame_id={ODOM_FRAME}, child_frame_id={BASE_LINK_FRAME}")
         print(f"[cobot3.spot]   /tf: {ODOM_FRAME} -> {BASE_LINK_FRAME}")
         print(f"[cobot3.spot]   /tf_static: {BASE_LINK_FRAME} -> {LIDAR_FRAME}")
-        print(f"[cobot3.spot]   /tf_static: {BASE_LINK_FRAME} -> {FRONT_CAM_FRAME}")
+        for spec in CAMERA_SPECS:
+            print(f"[cobot3.spot]   /tf_static: {BASE_LINK_FRAME} -> {spec['frame']}")
     except Exception as exc:
         print(f"[cobot3.spot] ❌ SLAM sensors graph 생성 실패: {exc}")
         traceback.print_exc()
