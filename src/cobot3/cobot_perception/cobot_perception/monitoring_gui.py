@@ -3,13 +3,13 @@
 Layout
 ======
 
-    +---------------------------+----------------------------+
-    |  YOLO annotated camera    |  2D top-down map view      |
-    |  (Image)                  |  (SLAM map + camera        |
-    |                           |   coverage + robot +       |
-    |                           |   survivor markers)        |
-    +---------------------------+----------------------------+
-    |  Status panel             |  Survivor list + captures  |
+    +-------------------+-------------------+-------------------+
+    |  Left YOLO cam    |  Center YOLO cam  |  Right YOLO cam   |
+    +-------------------+-------------------+-------------------+
+    |  2D top-down map view                           |
+    |  (SLAM map + camera coverage + robot + survivor)|
+    +-------------------------------------------------+
+    |  Status panel      Survivor list + captures     |
     |  - elapsed time           |  - detected survivor count |
     |  - current zone           |  - survivor pose list      |
     |  - waypoint progress      |  - delete survivor button  |
@@ -18,8 +18,10 @@ Layout
 
 Topics consumed
 ---------------
-    /spot_0/yolo/annotated_image  sensor_msgs/Image
-        YOLO annotated RGB image displayed in the camera panel.
+    /spot_0/yolo/left_annotated_image   sensor_msgs/Image
+    /spot_0/yolo/annotated_image        sensor_msgs/Image
+    /spot_0/yolo/right_annotated_image  sensor_msgs/Image
+        YOLO annotated RGB images displayed in the camera panels.
 
     /map                          nav_msgs/OccupancyGrid
         SLAM occupancy grid used as the base map for the top-down view.
@@ -122,7 +124,11 @@ class MonitorRosNode(Node):
         self._t0 = launch_t0
 
         # State
-        self._image: Optional[np.ndarray] = None
+        self._images: dict[str, Optional[np.ndarray]] = {
+            'left': None,
+            'center': None,
+            'right': None,
+        }
         self._map: Optional[OccupancyGrid] = None
         self._costmap: Optional[OccupancyGrid] = None
         self._coverage: Optional[OccupancyGrid] = None
@@ -144,8 +150,21 @@ class MonitorRosNode(Node):
             depth=1,
         )
 
-        self.create_subscription(Image, '/spot_0/yolo/annotated_image',
-                                 self._on_image, sensor)
+        image_topics = {
+            'left': '/spot_0/yolo/left_annotated_image',
+            'center': '/spot_0/yolo/annotated_image',
+            'right': '/spot_0/yolo/right_annotated_image',
+        }
+        self._image_subs = []
+        for camera_name, topic in image_topics.items():
+            self._image_subs.append(
+                self.create_subscription(
+                    Image,
+                    topic,
+                    lambda msg, name=camera_name: self._on_image(name, msg),
+                    sensor,
+                )
+            )
         self.create_subscription(OccupancyGrid, '/map', self._on_map, latched)
         self.create_subscription(OccupancyGrid, '/global_costmap/costmap',
                                  self._on_costmap, latched)
@@ -167,13 +186,13 @@ class MonitorRosNode(Node):
 
     # ── callbacks ──
 
-    def _on_image(self, msg: Image):
+    def _on_image(self, camera_name: str, msg: Image):
         try:
             arr = self._bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         except Exception:
             return
         with self._lock:
-            self._image = arr
+            self._images[camera_name] = arr
 
     def _on_map(self, msg: OccupancyGrid):
         with self._lock:
@@ -229,7 +248,10 @@ class MonitorRosNode(Node):
     def snapshot(self):
         with self._lock:
             return {
-                'image': None if self._image is None else self._image.copy(),
+                'images': {
+                    name: None if image is None else image.copy()
+                    for name, image in self._images.items()
+                },
                 'map': self._map,
                 'costmap': self._costmap,
                 'coverage': self._coverage,
@@ -269,15 +291,16 @@ def ros_thread_main(node: MonitorRosNode):
 
 
 class ImagePanel(QtWidgets.QLabel):
-    def __init__(self):
+    def __init__(self, waiting_text='No Image'):
         super().__init__()
-        self.setMinimumSize(480, 360)
+        self._waiting_text = waiting_text
+        self.setMinimumSize(320, 180)
         self.setAlignment(QtCore.Qt.AlignCenter)
         self.setStyleSheet(
             'background-color: #1f2937; color: #9ca3af;'
             'border: 1px solid #374151;'
         )
-        self.setText('No Image\n(Setup Camera in Isaac Sim?)')
+        self.setText(f'{self._waiting_text}\n(Setup Camera in Isaac Sim?)')
 
     def update_image(self, arr: Optional[np.ndarray]):
         if arr is None:
@@ -932,7 +955,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, ros_node: MonitorRosNode, launch_t0: float):
         super().__init__()
         self.setWindowTitle('Spot 생존자 탐색 모니터')
-        self.resize(1280, 840)
+        self.resize(1440, 1000)
         self.setStyleSheet('''
             QMainWindow, QWidget { background-color: #111827; color: #e5e7eb; }
             QGroupBox { border: 1px solid #374151; margin-top: 12px;
@@ -949,13 +972,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
         layout = QtWidgets.QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        # Top row: image + map
-        top_row = QtWidgets.QHBoxLayout()
-        image_box = QtWidgets.QGroupBox('YOLO 카메라')
-        image_layout = QtWidgets.QVBoxLayout(image_box)
-        self.image_panel = ImagePanel()
-        image_layout.addWidget(self.image_panel)
+        # Top row: left / center / right YOLO camera images
+        camera_row = QtWidgets.QHBoxLayout()
+        camera_row.setSpacing(8)
+        self.image_panels: dict[str, ImagePanel] = {}
+        for key, title in (
+                ('left', '왼쪽 cam'),
+                ('center', '중앙 cam'),
+                ('right', '오른쪽 cam')):
+            image_box = QtWidgets.QGroupBox(title)
+            image_layout = QtWidgets.QVBoxLayout(image_box)
+            image_layout.setContentsMargins(8, 10, 8, 8)
+            panel = ImagePanel(title)
+            self.image_panels[key] = panel
+            image_layout.addWidget(panel)
+            camera_row.addWidget(image_box, 1)
+        layout.addLayout(camera_row, 2)
 
         map_box = QtWidgets.QGroupBox('맵 + 로봇 + 생존자')
         map_layout = QtWidgets.QVBoxLayout(map_box)
@@ -1021,10 +1055,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         map_layout.addLayout(map_controls)
         map_layout.addWidget(self.map_panel)
-
-        top_row.addWidget(image_box, 1)
-        top_row.addWidget(map_box, 1)
-        layout.addLayout(top_row, 3)
+        layout.addWidget(map_box, 4)
 
         # Bottom: left status metrics + center survivor list
         self.status_panel = StatusPanel()
@@ -1038,7 +1069,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _tick(self):
         snap = self._ros.snapshot()
-        self.image_panel.update_image(snap['image'])
+        images = snap['images']
+        for name, panel in self.image_panels.items():
+            panel.update_image(images.get(name))
         self.map_panel.update_state(snap)
         self.status_panel.update_state(snap, time.time() - self._t0)
 

@@ -451,9 +451,22 @@ class CoveragePathPlanner(Node):
     # ------------------------------------------------------------------ #
     # Visualization
 
+    def _publish_delete_all_markers(self, publisher, namespace: str):
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header.frame_id = self._map_frame
+        clear.header.stamp = self.get_clock().now().to_msg()
+        clear.ns = namespace
+        clear.id = -1
+        clear.pose.orientation.w = 1.0
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+        publisher.publish(ma)
+
     def _publish_zone_viz(self):
         """One LINE_LIST + TEXT marker per zone — colored by state."""
         if not self._zone_enabled or not self._waypoints:
+            self._publish_delete_all_markers(self._zones_pub, 'coverage_zones')
             return
 
         # Aggregate per-zone: (visited_count, total_count)
@@ -465,15 +478,8 @@ class CoveragePathPlanner(Node):
             v, t = per_zone.get(z, (0, 0))
             per_zone[z] = (v + (1 if wp['visited'] else 0), t + 1)
 
+        self._publish_delete_all_markers(self._zones_pub, 'coverage_zones')
         ma = MarkerArray()
-        # Clear previous markers
-        clear = Marker()
-        clear.header.frame_id = self._map_frame
-        clear.header.stamp = self.get_clock().now().to_msg()
-        clear.ns = 'coverage_zones'
-        clear.pose.orientation.w = 1.0
-        clear.action = Marker.DELETEALL
-        ma.markers.append(clear)
 
         mid = 0
         for zone, (v, total) in per_zone.items():
@@ -532,16 +538,11 @@ class CoveragePathPlanner(Node):
     def _publish_waypoint_viz(self):
         """Sphere per waypoint — colored by visited / current."""
         if not self._waypoints:
+            self._publish_delete_all_markers(self._wps_pub, 'coverage_waypoints')
             return
 
+        self._publish_delete_all_markers(self._wps_pub, 'coverage_waypoints')
         ma = MarkerArray()
-        clear = Marker()
-        clear.header.frame_id = self._map_frame
-        clear.header.stamp = self.get_clock().now().to_msg()
-        clear.ns = 'coverage_waypoints'
-        clear.pose.orientation.w = 1.0
-        clear.action = Marker.DELETEALL
-        ma.markers.append(clear)
 
         for mid, (key, wp) in enumerate(self._waypoints.items()):
             m = Marker()
