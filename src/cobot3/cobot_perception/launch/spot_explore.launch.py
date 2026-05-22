@@ -25,10 +25,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# YOLO/ultralytics lives only in this venv, not in system Python.
-PERCEPTION_VENV_PYTHON = "/home/rokey/dev_ws/venv/perception/bin/python"
-
-
 def _load_speed_config(pkg_nav):
     speed_path = os.path.join(pkg_nav, "config", "spot_speed.yaml")
     with open(speed_path, "r", encoding="utf-8") as f:
@@ -180,7 +176,10 @@ def generate_launch_description():
                 executable="yolo_detector",
                 name="yolo_detector",
                 output="screen",
-                prefix=PERCEPTION_VENV_PYTHON,
+                additional_env={
+                    "MPLCONFIGDIR": "/tmp/matplotlib",
+                    "YOLO_CONFIG_DIR": "/tmp/Ultralytics",
+                },
                 parameters=[
                     detector_params,
                     {"model_path": yolo_model},
