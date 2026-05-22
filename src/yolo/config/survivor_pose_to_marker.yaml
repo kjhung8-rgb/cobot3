@@ -3,6 +3,8 @@ survivor_pose_to_marker:
   ros__parameters:
     pose_subscription_topic: /detected_survivor_pose
     marker_publication_topic: /survivor_goal_marker
+    survivor_delete_topic: /survivor_delete_id
+    delete_marker_frame: map
     marker_half_size: 0.75
     marker_z_lift: 0.15
     line_width: 0.12

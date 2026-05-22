@@ -20,11 +20,17 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Int32
 from ultralytics import YOLO
 
 
 PERSON_CLASS_ID = 0  # COCO 'person'
+
+
+@dataclass
+class ConfirmedSurvivor:
+    survivor_id: int
+    pose: PoseStamped
 
 
 @dataclass
@@ -47,6 +53,7 @@ class SurvivorDetector(Node):
         self.declare_parameter("detected_topic", "/spot_0/yolo/person_detected")
         self.declare_parameter("base_pose_topic", "/spot_0/yolo/person_pose_base")
         self.declare_parameter("survivor_pose_topic", "/detected_survivor_pose")
+        self.declare_parameter("survivor_delete_topic", "/survivor_delete_id")
         self.declare_parameter("confidence_threshold", 0.4)
         self.declare_parameter("device", "cuda")
         self.declare_parameter("imgsz", 640)
@@ -89,6 +96,7 @@ class SurvivorDetector(Node):
         detected_topic = self.get_parameter("detected_topic").value
         base_pose_topic = self.get_parameter("base_pose_topic").value
         survivor_pose_topic = self.get_parameter("survivor_pose_topic").value
+        survivor_delete_topic = self.get_parameter("survivor_delete_topic").value
 
         self.conf_thresh = float(self.get_parameter("confidence_threshold").value)
         self.device = self.get_parameter("device").value
@@ -160,8 +168,9 @@ class SurvivorDetector(Node):
         self._last_capture_time = self.get_clock().now() - Duration(seconds=9999.0)
         self._frame_count = 0
         self._capture_count = 0
-        self._confirmed_survivors: list[PoseStamped] = []
+        self._confirmed_survivors: list[ConfirmedSurvivor] = []
         self._pending_survivors: list[SurvivorCandidate] = []
+        self._next_survivor_id = 1
 
         if self.save_detection_images:
             try:
@@ -220,13 +229,16 @@ class SurvivorDetector(Node):
         self.pub_survivor_pose = self.create_publisher(
             PoseStamped, survivor_pose_topic, 10
         )
+        self.delete_sub = self.create_subscription(
+            Int32, survivor_delete_topic, self._on_delete_survivor, reliable_qos
+        )
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.get_logger().info(
             "subscribed rgb=%s depth=%s camera_info=%s; publishing annotated=%s "
-            "detected=%s base_pose=%s survivor_pose=%s target_frame=%s"
+            "detected=%s base_pose=%s survivor_pose=%s target_frame=%s delete_topic=%s"
             % (
                 image_topic,
                 depth_topic,
@@ -236,6 +248,7 @@ class SurvivorDetector(Node):
                 base_pose_topic,
                 survivor_pose_topic,
                 self.target_frame,
+                survivor_delete_topic,
             )
         )
 
@@ -388,13 +401,14 @@ class SurvivorDetector(Node):
     def _accept_new_survivor(self, pose: PoseStamped) -> Optional[int]:
         self._prune_pending_survivors()
 
-        known_index, known_dist = self._nearest_pose_index(
-            pose, self._confirmed_survivors, self.survivor_match_radius
+        known_index, known_dist = self._nearest_confirmed_survivor_index(
+            pose, self.survivor_match_radius
         )
         if known_index is not None:
+            survivor_id = self._confirmed_survivors[known_index].survivor_id
             self.get_logger().info(
                 "duplicate survivor ignored: existing #%d distance=%.2fm"
-                % (known_index + 1, known_dist)
+                % (survivor_id, known_dist)
             )
             return None
 
@@ -437,7 +451,13 @@ class SurvivorDetector(Node):
                 return None
 
         candidate_pose = candidate.pose
-        self._confirmed_survivors.append(self._copy_pose(candidate_pose))
+        survivor_id = self._next_survivor_id
+        self._next_survivor_id += 1
+        self._confirmed_survivors.append(
+            ConfirmedSurvivor(
+                survivor_id=survivor_id, pose=self._copy_pose(candidate_pose)
+            )
+        )
         if pending_index is None:
             self._pending_survivors = [
                 c for c in self._pending_survivors if c is not candidate
@@ -447,12 +467,54 @@ class SurvivorDetector(Node):
 
         pose.header = candidate_pose.header
         pose.pose = candidate_pose.pose
-        survivor_id = len(self._confirmed_survivors)
         self.get_logger().info(
             "confirmed survivor #%d; total=%d"
             % (survivor_id, len(self._confirmed_survivors))
         )
         return survivor_id
+
+    def _on_delete_survivor(self, msg: Int32):
+        survivor_id = int(msg.data)
+        if survivor_id == 0:
+            confirmed_count = len(self._confirmed_survivors)
+            pending_count = len(self._pending_survivors)
+            self._confirmed_survivors.clear()
+            self._pending_survivors.clear()
+            self._next_survivor_id = 1
+            self.get_logger().info(
+                "deleted all survivors from detector memory "
+                f"(confirmed={confirmed_count}, pending={pending_count})"
+            )
+            return
+
+        if survivor_id < 0:
+            self.get_logger().warn(
+                f"ignoring invalid survivor delete id {survivor_id}; use 0 for all"
+            )
+            return
+
+        for index, survivor in enumerate(self._confirmed_survivors):
+            if survivor.survivor_id != survivor_id:
+                continue
+            removed = self._confirmed_survivors.pop(index)
+            p = removed.pose.pose.position
+            self.get_logger().info(
+                "deleted survivor #%d from detector memory at %s=(%.2f, %.2f, %.2f); "
+                "remaining=%d"
+                % (
+                    survivor_id,
+                    removed.pose.header.frame_id,
+                    p.x,
+                    p.y,
+                    p.z,
+                    len(self._confirmed_survivors),
+                )
+            )
+            return
+
+        self.get_logger().warn(
+            f"delete requested for unknown survivor #{survivor_id}; no detector entry removed"
+        )
 
     def _prune_pending_survivors(self):
         if self.candidate_ttl <= 0.0:
@@ -468,6 +530,16 @@ class SurvivorDetector(Node):
         nearest_dist = math.inf
         for index, candidate in enumerate(poses):
             dist = self._pose_xy_distance(pose, candidate)
+            if dist <= max_dist and dist < nearest_dist:
+                nearest_index = index
+                nearest_dist = dist
+        return nearest_index, nearest_dist
+
+    def _nearest_confirmed_survivor_index(self, pose, max_dist: float):
+        nearest_index = None
+        nearest_dist = math.inf
+        for index, survivor in enumerate(self._confirmed_survivors):
+            dist = self._pose_xy_distance(pose, survivor.pose)
             if dist <= max_dist and dist < nearest_dist:
                 nearest_index = index
                 nearest_dist = dist

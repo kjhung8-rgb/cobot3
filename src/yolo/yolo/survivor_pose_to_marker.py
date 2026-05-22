@@ -10,7 +10,7 @@ import rclpy
 from geometry_msgs.msg import Point, PoseStamped
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import ColorRGBA, Int32
 from visualization_msgs.msg import Marker
 
 
@@ -73,6 +73,23 @@ def _sphere_marker_msg(
     return m
 
 
+def _delete_marker_msg(frame_id: str, marker_id: int) -> Marker:
+    m = Marker()
+    m.header.frame_id = frame_id
+    m.ns = "survivor"
+    m.id = marker_id
+    m.action = Marker.DELETE
+    return m
+
+
+def _delete_all_marker_msg(frame_id: str) -> Marker:
+    m = Marker()
+    m.header.frame_id = frame_id
+    m.ns = "survivor"
+    m.action = Marker.DELETEALL
+    return m
+
+
 class SurvivorPoseToMarker(Node):
     """Bridge: PoseStamped (YOLO 등) -> visualization_msgs/Marker for RViz."""
 
@@ -81,6 +98,8 @@ class SurvivorPoseToMarker(Node):
 
         self.declare_parameter("pose_subscription_topic", "/detected_survivor_pose")
         self.declare_parameter("marker_publication_topic", "/survivor_goal_marker")
+        self.declare_parameter("survivor_delete_topic", "/survivor_delete_id")
+        self.declare_parameter("delete_marker_frame", "map")
         self.declare_parameter("marker_half_size", 0.75)
         self.declare_parameter("marker_z_lift", 0.15)
         self.declare_parameter("line_width", 0.12)
@@ -94,6 +113,12 @@ class SurvivorPoseToMarker(Node):
         marker_topic = (
             self.get_parameter("marker_publication_topic").get_parameter_value().string_value
         )
+        delete_topic = (
+            self.get_parameter("survivor_delete_topic").get_parameter_value().string_value
+        )
+        self._delete_frame = (
+            self.get_parameter("delete_marker_frame").get_parameter_value().string_value
+        )
         self._half = self.get_parameter("marker_half_size").get_parameter_value().double_value
         self._z_lift = self.get_parameter("marker_z_lift").get_parameter_value().double_value
         self._line_width = self.get_parameter("line_width").get_parameter_value().double_value
@@ -105,6 +130,7 @@ class SurvivorPoseToMarker(Node):
         )
         self._log_each = self.get_parameter("log_each_pose").get_parameter_value().bool_value
         self._next_pose_index = 0
+        self._last_marker_frame = self._delete_frame
 
         # Match `ros2 topic pub` defaults (Reliable).
         qos = QoSProfile(
@@ -115,22 +141,33 @@ class SurvivorPoseToMarker(Node):
 
         self._pub = self.create_publisher(Marker, marker_topic, qos)
         self._sub = self.create_subscription(PoseStamped, pose_topic, self._cb, qos)
+        self._delete_sub = self.create_subscription(
+            Int32, delete_topic, self._on_delete_survivor, qos
+        )
 
         self.get_logger().info(
             f"survivor_pose_to_marker: sub {pose_topic} -> Marker pub {marker_topic} "
-            f"(accumulate={self._accumulate})"
+            f"delete_sub {delete_topic} (accumulate={self._accumulate})"
         )
 
-    def _marker_ids(self) -> tuple[int, int]:
+    def _next_marker_ids(self) -> tuple[int, int, int]:
         if self._accumulate:
-            base = self._next_pose_index * 2
+            survivor_id = self._next_pose_index + 1
+            base = self._marker_base_id(survivor_id)
             self._next_pose_index += 1
-            return base, base + 1
-        return 0, 1
+            return survivor_id, base, base + 1
+        return 1, 0, 1
+
+    @staticmethod
+    def _marker_base_id(survivor_id: int) -> int:
+        return (survivor_id - 1) * 2
 
     def _cb(self, msg: PoseStamped):
-        x_id, sphere_id = self._marker_ids()
-        self._pub.publish(_x_marker_msg(msg, self._half, self._z_lift, self._line_width, x_id))
+        self._last_marker_frame = msg.header.frame_id or self._delete_frame
+        survivor_id, x_id, sphere_id = self._next_marker_ids()
+        self._pub.publish(
+            _x_marker_msg(msg, self._half, self._z_lift, self._line_width, x_id)
+        )
         self._pub.publish(
             _sphere_marker_msg(msg, self._sphere_diameter, self._z_lift, sphere_id)
         )
@@ -139,11 +176,46 @@ class SurvivorPoseToMarker(Node):
             p = msg.pose.position
             o = msg.pose.orientation
             self.get_logger().info(
-                f"[survivor pose #{self._next_pose_index if self._accumulate else 1}] "
+                f"[survivor marker #{survivor_id}] "
                 f"marker_ids=({x_id}, {sphere_id}) frame={msg.header.frame_id} "
                 f"xyz=({p.x:.3f}, {p.y:.3f}, {p.z:.3f}) "
                 f"quat_xyzw=({o.x:.3f}, {o.y:.3f}, {o.z:.3f}, {o.w:.3f})"
             )
+
+    def _on_delete_survivor(self, msg: Int32):
+        survivor_id = int(msg.data)
+        frame_id = self._last_marker_frame or self._delete_frame
+
+        if survivor_id == 0:
+            delete_msg = _delete_all_marker_msg(frame_id)
+            delete_msg.header.stamp = self.get_clock().now().to_msg()
+            self._pub.publish(delete_msg)
+            self._next_pose_index = 0
+            self.get_logger().info("deleted all survivor markers")
+            return
+
+        if survivor_id < 0:
+            self.get_logger().warn(
+                f"ignoring invalid survivor delete id {survivor_id}; use 0 for all"
+            )
+            return
+
+        if self._accumulate:
+            x_id = self._marker_base_id(survivor_id)
+            sphere_id = x_id + 1
+        else:
+            x_id, sphere_id = 0, 1
+
+        stamp = self.get_clock().now().to_msg()
+        x_delete = _delete_marker_msg(frame_id, x_id)
+        sphere_delete = _delete_marker_msg(frame_id, sphere_id)
+        x_delete.header.stamp = stamp
+        sphere_delete.header.stamp = stamp
+        self._pub.publish(x_delete)
+        self._pub.publish(sphere_delete)
+        self.get_logger().info(
+            f"deleted survivor marker #{survivor_id} marker_ids=({x_id}, {sphere_id})"
+        )
 
 
 def main(args=None):
