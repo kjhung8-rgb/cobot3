@@ -176,6 +176,10 @@ def generate_launch_description():
                 executable="yolo_detector",
                 name="yolo_detector",
                 output="screen",
+                additional_env={
+                    "MPLCONFIGDIR": "/tmp/matplotlib",
+                    "YOLO_CONFIG_DIR": "/tmp/Ultralytics",
+                },
                 parameters=[
                     detector_params,
                     {"model_path": yolo_model},
