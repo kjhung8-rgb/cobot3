@@ -29,6 +29,7 @@ setup(
             'camera_coverage_sweep = cobot_perception.camera_coverage_sweep:main',
             'coverage_path_planner = cobot_perception.coverage_path_planner:main',
             'stop_watchdog = cobot_perception.stop_watchdog:main',
+            'monitoring_gui = cobot_perception.monitoring_gui:main',
         ],
     },
 )
