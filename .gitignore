@@ -49,3 +49,6 @@ src/yolo/dectected_person/*.PNG
 
 # .agent 파일
 *.agent
+
+# .codex 파일
+*.codex
