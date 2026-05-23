@@ -18,10 +18,12 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
-# Install map files
-install(DIRECTORY maps/
-  DESTINATION share/${PROJECT_NAME}/maps
-)
+# Map files are gitignored (see repo .gitignore); install only when present locally.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/maps")
+  install(DIRECTORY maps/
+    DESTINATION share/${PROJECT_NAME}/maps
+  )
+endif()
 
 # Install RViz configs
 install(DIRECTORY rviz2/
