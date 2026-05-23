@@ -40,7 +40,7 @@ from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import Bool, ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -102,6 +102,9 @@ class CoveragePathPlanner(Node):
         self._spinning = False
         self._spin_start_ns = 0
         self._current_wp_key: Optional[WaypointKey] = None
+        self._paused = False
+        self._nav_goal_handle = None
+        self._canceling_for_pause = False
         self._launch_time = time.time()
         self._last_replan_ts = 0.0
 
@@ -123,6 +126,8 @@ class CoveragePathPlanner(Node):
         self._cmd_pub = self.create_publisher(
             Twist, self.get_parameter('cmd_vel_topic').value, 10,
         )
+        self.create_subscription(Bool, '/explore/resume', self._on_resume, 10)
+        self.create_subscription(Bool, '/coverage_planner/resume', self._on_resume, 10)
         self._zones_pub = self.create_publisher(
             MarkerArray, '/coverage_zones', latched_qos,
         )
@@ -149,6 +154,50 @@ class CoveragePathPlanner(Node):
 
     def _on_coverage(self, msg: OccupancyGrid):
         self._coverage = msg
+
+    def _on_resume(self, msg: Bool):
+        if msg.data:
+            self._resume()
+        else:
+            self._pause()
+
+    def _pause(self):
+        if self._paused:
+            return
+        was_spinning = self._spinning
+        self._paused = True
+        self._canceling_for_pause = True
+        self._spinning = False
+        self._publish_stop()
+
+        if self._nav_goal_handle is not None:
+            self.get_logger().info('coverage_path_planner paused; canceling active Nav2 goal')
+            try:
+                self._nav_goal_handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f'failed to cancel Nav2 goal while pausing: {exc}')
+                self._release_current_goal(mark_visited=False)
+        elif self._busy and not was_spinning:
+            self.get_logger().info(
+                'coverage_path_planner paused; waiting for pending Nav2 goal to cancel'
+            )
+        else:
+            self._release_current_goal(mark_visited=False)
+            self.get_logger().info('coverage_path_planner paused')
+
+    def _resume(self):
+        if not self._paused:
+            return
+        self._paused = False
+        if not self._busy and self._nav_goal_handle is None:
+            self._canceling_for_pause = False
+        self._publish_stop()
+        self.get_logger().info('coverage_path_planner resumed')
+
+    def _publish_stop(self):
+        stop = Twist()
+        for _ in range(3):
+            self._cmd_pub.publish(stop)
 
     def _get_robot_pose(self) -> Optional[Tuple[float, float]]:
         try:
@@ -315,6 +364,8 @@ class CoveragePathPlanner(Node):
     # ------------------------------------------------------------------ #
 
     def _main_tick(self):
+        if self._paused:
+            return
         # Startup delay so Nav2 has time to come up
         if time.time() - self._launch_time < float(self.get_parameter('startup_delay_sec').value):
             return
@@ -388,13 +439,22 @@ class CoveragePathPlanner(Node):
             handle = future.result()
         except Exception as exc:
             self.get_logger().error(f'send_goal failed: {exc}')
-            self._mark_visited_and_release()
+            self._release_current_goal(mark_visited=not self._paused)
             return
+        self._nav_goal_handle = handle
         if not handle.accepted:
             self.get_logger().warn('Goal rejected')
-            self._mark_visited_and_release()
+            self._nav_goal_handle = None
+            self._release_current_goal(mark_visited=not self._paused)
             return
         handle.get_result_async().add_done_callback(self._on_goal_result)
+        if self._paused or self._canceling_for_pause:
+            self._canceling_for_pause = True
+            try:
+                handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f'failed to cancel Nav2 goal after pause: {exc}')
+                self._release_current_goal(mark_visited=False)
 
     def _on_goal_result(self, future):
         try:
@@ -402,13 +462,21 @@ class CoveragePathPlanner(Node):
             status = res.status
         except Exception as exc:
             self.get_logger().error(f'goal result failed: {exc}')
-            self._mark_visited_and_release()
+            self._nav_goal_handle = None
+            self._release_current_goal(mark_visited=not self._paused)
             return
 
         name = {GoalStatus.STATUS_SUCCEEDED: 'SUCCEEDED',
                 GoalStatus.STATUS_ABORTED: 'ABORTED',
                 GoalStatus.STATUS_CANCELED: 'CANCELED'}.get(status, str(status))
         self.get_logger().info(f'   result: {name}')
+        self._nav_goal_handle = None
+
+        if self._paused or self._canceling_for_pause:
+            self._canceling_for_pause = False
+            self._release_current_goal(mark_visited=False)
+            self._publish_stop()
+            return
 
         # Either way, mark visited so we don't pick it forever. SUCCESS:
         # great. ABORTED: unreachable, skip. CANCELED: shouldn't happen
@@ -419,20 +487,29 @@ class CoveragePathPlanner(Node):
             self._spinning = True
             self._spin_start_ns = self.get_clock().now().nanoseconds
         else:
-            self._mark_visited_and_release()
+            self._release_current_goal(mark_visited=True)
 
     def _mark_visited(self):
         if self._current_wp_key is not None and self._current_wp_key in self._waypoints:
             self._waypoints[self._current_wp_key]['visited'] = True
 
-    def _mark_visited_and_release(self):
-        self._mark_visited()
+    def _release_current_goal(self, mark_visited: bool):
+        if mark_visited:
+            self._mark_visited()
         self._current_wp_key = None
+        self._nav_goal_handle = None
+        self._spinning = False
         self._busy = False
 
     # ------------------------------------------------------------------ #
 
     def _spin_tick(self):
+        if self._paused:
+            if self._spinning:
+                self._spinning = False
+                self._release_current_goal(mark_visited=False)
+                self._publish_stop()
+            return
         if not self._spinning:
             return
         elapsed = (self.get_clock().now().nanoseconds - self._spin_start_ns) / 1e9
@@ -441,12 +518,8 @@ class CoveragePathPlanner(Node):
             t.angular.z = self._spin_speed
             self._cmd_pub.publish(t)
             return
-        stop = Twist()
-        for _ in range(3):
-            self._cmd_pub.publish(stop)
-        self._spinning = False
-        self._current_wp_key = None
-        self._busy = False
+        self._publish_stop()
+        self._release_current_goal(mark_visited=False)
 
     # ------------------------------------------------------------------ #
     # Visualization

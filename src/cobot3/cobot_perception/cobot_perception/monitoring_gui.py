@@ -75,13 +75,13 @@ import numpy as np
 import rclpy
 import tf2_ros
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int32
+from std_msgs.msg import Bool, Int32, String
 from visualization_msgs.msg import MarkerArray
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -137,6 +137,7 @@ class MonitorRosNode(Node):
         self._waypoints: Optional[MarkerArray] = None
         self._survivors: List[Survivor] = []
         self._next_survivor_id = 1
+        self._control_mode = 'autonomous'
 
         latched = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -178,6 +179,15 @@ class MonitorRosNode(Node):
                                  self._on_survivor, 10)
         self._survivor_delete_pub = self.create_publisher(
             Int32, '/survivor_delete_id', 10
+        )
+        self._control_mode_pub = self.create_publisher(
+            String, '/control_mode', 10
+        )
+        self._explore_resume_pub = self.create_publisher(
+            Bool, '/explore/resume', 10
+        )
+        self._teleop_pub = self.create_publisher(
+            Twist, '/teleop_cmd_vel', 10
         )
 
         self._tf_buffer = tf2_ros.Buffer()
@@ -259,6 +269,7 @@ class MonitorRosNode(Node):
                 'zones': self._zones,
                 'waypoints': self._waypoints,
                 'survivors': list(self._survivors),
+                'control_mode': self._control_mode,
             }
 
     def delete_survivor(self, survivor_id: int):
@@ -274,6 +285,43 @@ class MonitorRosNode(Node):
                 self._survivors = [
                     s for s in self._survivors if s.survivor_id != survivor_id
                 ]
+
+    def set_control_mode(self, mode: str):
+        mode = mode.strip().lower()
+        if mode not in ('autonomous', 'manual'):
+            return
+
+        if mode == 'manual':
+            self.publish_teleop_stop()
+            self._publish_explore_resume(False)
+            self._publish_control_mode('manual')
+        else:
+            self.publish_teleop_stop()
+            self._publish_control_mode('autonomous')
+            self._publish_explore_resume(True)
+
+        with self._lock:
+            self._control_mode = mode
+
+    def publish_teleop(self, linear_x: float = 0.0, angular_z: float = 0.0):
+        msg = Twist()
+        msg.linear.x = float(linear_x)
+        msg.angular.z = float(angular_z)
+        self._teleop_pub.publish(msg)
+
+    def publish_teleop_stop(self):
+        for _ in range(3):
+            self.publish_teleop(0.0, 0.0)
+
+    def _publish_control_mode(self, mode: str):
+        msg = String()
+        msg.data = mode
+        self._control_mode_pub.publish(msg)
+
+    def _publish_explore_resume(self, resume: bool):
+        msg = Bool()
+        msg.data = bool(resume)
+        self._explore_resume_pub.publish(msg)
 
 
 def ros_thread_main(node: MonitorRosNode):
@@ -967,6 +1015,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._ros = ros_node
         self._t0 = launch_t0
+        self._control_mode = 'autonomous'
+        self._pressed_keys: set[int] = set()
+        self._teleop_linear_speed = 0.5
+        self._teleop_angular_speed = 1.0
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -1057,6 +1113,30 @@ class MainWindow(QtWidgets.QMainWindow):
         map_layout.addWidget(self.map_panel)
         layout.addWidget(map_box, 4)
 
+        mode_box = QtWidgets.QGroupBox('주행 모드')
+        mode_layout = QtWidgets.QHBoxLayout(mode_box)
+        mode_layout.setContentsMargins(12, 10, 12, 10)
+        mode_layout.setSpacing(10)
+        self.auto_btn = QtWidgets.QPushButton('자율탐사')
+        self.manual_btn = QtWidgets.QPushButton('수동조작')
+        for btn in (self.auto_btn, self.manual_btn):
+            btn.setCheckable(True)
+            btn.setMinimumHeight(34)
+        self.auto_btn.setChecked(True)
+        self.mode_status_lbl = QtWidgets.QLabel('자율탐사 모드')
+        self.mode_status_lbl.setStyleSheet('color: #9ca3af;')
+        self.teleop_speed_lbl = QtWidgets.QLabel(self._teleop_speed_text())
+        self.teleop_speed_lbl.setStyleSheet('color: #9ca3af;')
+        self.auto_btn.clicked.connect(self._set_autonomous_mode)
+        self.manual_btn.clicked.connect(self._set_manual_mode)
+        mode_layout.addWidget(self.auto_btn)
+        mode_layout.addWidget(self.manual_btn)
+        mode_layout.addSpacing(12)
+        mode_layout.addWidget(self.mode_status_lbl)
+        mode_layout.addStretch()
+        mode_layout.addWidget(self.teleop_speed_lbl)
+        layout.addWidget(mode_box, 0)
+
         # Bottom: left status metrics + center survivor list
         self.status_panel = StatusPanel()
         layout.addWidget(self.status_panel, 2)
@@ -1066,6 +1146,10 @@ class MainWindow(QtWidgets.QMainWindow):
         timer = QtCore.QTimer(self)
         timer.timeout.connect(self._tick)
         timer.start(200)  # 5 Hz
+
+        self._teleop_timer = QtCore.QTimer(self)
+        self._teleop_timer.timeout.connect(self._publish_current_teleop)
+        self._teleop_timer.start(100)  # 10 Hz
 
     def _tick(self):
         snap = self._ros.snapshot()
@@ -1085,6 +1169,117 @@ class MainWindow(QtWidgets.QMainWindow):
         elif value < -180:
             value += 360
         self.map_rotation_slider.setValue(value)
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        if self._control_mode != 'manual':
+            return super().eventFilter(obj, event)
+
+        event_type = event.type()
+        if event_type not in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease):
+            return super().eventFilter(obj, event)
+
+        key = event.key()
+        if not self._is_teleop_key(key):
+            return super().eventFilter(obj, event)
+
+        if event_type == QtCore.QEvent.KeyPress:
+            if key == QtCore.Qt.Key_Q and not event.isAutoRepeat():
+                self._adjust_teleop_speed(+0.1)
+            elif key == QtCore.Qt.Key_Z and not event.isAutoRepeat():
+                self._adjust_teleop_speed(-0.1)
+            elif key == QtCore.Qt.Key_Space:
+                self._pressed_keys.clear()
+                self._ros.publish_teleop_stop()
+            elif self._is_motion_key(key):
+                self._pressed_keys.add(key)
+                self._publish_current_teleop()
+            return True
+
+        if event_type == QtCore.QEvent.KeyRelease:
+            if event.isAutoRepeat():
+                return True
+            if self._is_motion_key(key):
+                self._pressed_keys.discard(key)
+                self._publish_current_teleop()
+            return True
+
+        return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):  # noqa: N802 (Qt API)
+        self._pressed_keys.clear()
+        self._ros.publish_teleop_stop()
+        super().closeEvent(event)
+
+    def _set_autonomous_mode(self, checked=False):
+        self._control_mode = 'autonomous'
+        self._pressed_keys.clear()
+        self._ros.set_control_mode('autonomous')
+        self.auto_btn.setChecked(True)
+        self.manual_btn.setChecked(False)
+        self.mode_status_lbl.setText('자율탐사 모드')
+        self.setFocus()
+
+    def _set_manual_mode(self, checked=False):
+        self._control_mode = 'manual'
+        self._pressed_keys.clear()
+        self._ros.set_control_mode('manual')
+        self.auto_btn.setChecked(False)
+        self.manual_btn.setChecked(True)
+        self.mode_status_lbl.setText('수동조작 모드')
+        self.setFocus()
+
+    def _teleop_speed_text(self) -> str:
+        return (
+            f'WASD/방향키  선속도 {self._teleop_linear_speed:.1f} m/s  '
+            f'각속도 {self._teleop_angular_speed:.1f} rad/s'
+        )
+
+    @staticmethod
+    def _is_motion_key(key: int) -> bool:
+        return key in (
+            QtCore.Qt.Key_W,
+            QtCore.Qt.Key_S,
+            QtCore.Qt.Key_A,
+            QtCore.Qt.Key_D,
+            QtCore.Qt.Key_Up,
+            QtCore.Qt.Key_Down,
+            QtCore.Qt.Key_Left,
+            QtCore.Qt.Key_Right,
+        )
+
+    def _is_teleop_key(self, key: int) -> bool:
+        return self._is_motion_key(key) or key in (
+            QtCore.Qt.Key_Q,
+            QtCore.Qt.Key_Z,
+            QtCore.Qt.Key_Space,
+        )
+
+    def _adjust_teleop_speed(self, delta: float):
+        self._teleop_linear_speed = min(
+            max(self._teleop_linear_speed + delta, 0.1), 3.0
+        )
+        self._teleop_angular_speed = min(
+            max(self._teleop_angular_speed + delta, 0.1), 3.0
+        )
+        self.teleop_speed_lbl.setText(self._teleop_speed_text())
+        self._ros.publish_teleop_stop()
+
+    def _publish_current_teleop(self):
+        if self._control_mode != 'manual':
+            return
+
+        linear = 0.0
+        angular = 0.0
+        if QtCore.Qt.Key_W in self._pressed_keys or QtCore.Qt.Key_Up in self._pressed_keys:
+            linear += self._teleop_linear_speed
+        if QtCore.Qt.Key_S in self._pressed_keys or QtCore.Qt.Key_Down in self._pressed_keys:
+            linear -= self._teleop_linear_speed
+        if QtCore.Qt.Key_A in self._pressed_keys or QtCore.Qt.Key_Left in self._pressed_keys:
+            angular += self._teleop_angular_speed
+        if QtCore.Qt.Key_D in self._pressed_keys or QtCore.Qt.Key_Right in self._pressed_keys:
+            angular -= self._teleop_angular_speed
+
+        self._ros.publish_teleop(linear, angular)
 
 
 def main(args=None):
