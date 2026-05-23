@@ -1000,6 +1000,12 @@ class StatusPanel(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    TELEOP_DEFAULT_LINEAR_SPEED = 0.5
+    TELEOP_DEFAULT_ANGULAR_SPEED = 1.0
+    TELEOP_MIN_SPEED = 0.1
+    TELEOP_MAX_SPEED = 3.0
+    TELEOP_SPEED_STEP = 0.1
+
     def __init__(self, ros_node: MonitorRosNode, launch_t0: float):
         super().__init__()
         self.setWindowTitle('Spot 생존자 탐색 모니터')
@@ -1017,8 +1023,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._t0 = launch_t0
         self._control_mode = 'autonomous'
         self._pressed_keys: set[int] = set()
-        self._teleop_linear_speed = 0.5
-        self._teleop_angular_speed = 1.0
+        self._teleop_linear_speed = self.TELEOP_DEFAULT_LINEAR_SPEED
+        self._teleop_angular_speed = self.TELEOP_DEFAULT_ANGULAR_SPEED
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         app = QtWidgets.QApplication.instance()
         if app is not None:
@@ -1184,9 +1190,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if event_type == QtCore.QEvent.KeyPress:
             if key == QtCore.Qt.Key_Q and not event.isAutoRepeat():
-                self._adjust_teleop_speed(+0.1)
+                self._adjust_teleop_speed(+self.TELEOP_SPEED_STEP)
             elif key == QtCore.Qt.Key_Z and not event.isAutoRepeat():
-                self._adjust_teleop_speed(-0.1)
+                self._adjust_teleop_speed(-self.TELEOP_SPEED_STEP)
             elif key == QtCore.Qt.Key_Space:
                 self._pressed_keys.clear()
                 self._ros.publish_teleop_stop()
@@ -1214,6 +1220,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._control_mode = 'autonomous'
         self._pressed_keys.clear()
         self._ros.set_control_mode('autonomous')
+        self._reset_teleop_speed()
         self.auto_btn.setChecked(True)
         self.manual_btn.setChecked(False)
         self.mode_status_lbl.setText('자율탐사 모드')
@@ -1230,7 +1237,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _teleop_speed_text(self) -> str:
         return (
-            f'WASD/방향키  선속도 {self._teleop_linear_speed:.1f} m/s  '
+            f'WASD/방향키  Q/Z 속도 +/-  선속도 {self._teleop_linear_speed:.1f} m/s  '
             f'각속도 {self._teleop_angular_speed:.1f} rad/s'
         )
 
@@ -1256,13 +1263,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _adjust_teleop_speed(self, delta: float):
         self._teleop_linear_speed = min(
-            max(self._teleop_linear_speed + delta, 0.1), 3.0
+            max(self._teleop_linear_speed + delta, self.TELEOP_MIN_SPEED),
+            self.TELEOP_MAX_SPEED,
         )
         self._teleop_angular_speed = min(
-            max(self._teleop_angular_speed + delta, 0.1), 3.0
+            max(self._teleop_angular_speed + delta, self.TELEOP_MIN_SPEED),
+            self.TELEOP_MAX_SPEED,
         )
         self.teleop_speed_lbl.setText(self._teleop_speed_text())
-        self._ros.publish_teleop_stop()
+        self._publish_current_teleop()
+
+    def _reset_teleop_speed(self):
+        self._teleop_linear_speed = self.TELEOP_DEFAULT_LINEAR_SPEED
+        self._teleop_angular_speed = self.TELEOP_DEFAULT_ANGULAR_SPEED
+        self.teleop_speed_lbl.setText(self._teleop_speed_text())
 
     def _publish_current_teleop(self):
         if self._control_mode != 'manual':
