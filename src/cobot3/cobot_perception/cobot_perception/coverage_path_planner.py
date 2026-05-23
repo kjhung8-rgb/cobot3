@@ -189,6 +189,8 @@ class CoveragePathPlanner(Node):
         if not self._paused:
             return
         self._paused = False
+        self._reanchor_zone_to_robot()
+        self._last_replan_ts = 0.0
         if not self._busy and self._nav_goal_handle is None:
             self._canceling_for_pause = False
         self._publish_stop()
@@ -207,6 +209,25 @@ class CoveragePathPlanner(Node):
             return t.transform.translation.x, t.transform.translation.y
         except Exception:
             return None
+
+    def _zone_for_pose(self, x: float, y: float) -> Optional[Tuple[int, int]]:
+        if not self._zone_enabled:
+            return None
+        return (int(math.floor(x / self._zone_size)),
+                int(math.floor(y / self._zone_size)))
+
+    def _reanchor_zone_to_robot(self):
+        if not self._zone_enabled:
+            return
+        pose = self._get_robot_pose()
+        if pose is None:
+            return
+        robot_zone = self._zone_for_pose(*pose)
+        if robot_zone != self._current_zone:
+            self.get_logger().info(
+                f'resuming from robot zone {robot_zone} (was {self._current_zone})'
+            )
+        self._current_zone = robot_zone
 
     # ------------------------------------------------------------------ #
 
@@ -317,8 +338,7 @@ class CoveragePathPlanner(Node):
 
         # Pick / advance current zone
         if self._current_zone is None:
-            self._current_zone = (int(math.floor(rx / self._zone_size)),
-                                  int(math.floor(ry / self._zone_size)))
+            self._current_zone = self._zone_for_pose(rx, ry)
             self.get_logger().info(f'starting zone {self._current_zone}')
 
         # Try to pick nearest unvisited within current zone
