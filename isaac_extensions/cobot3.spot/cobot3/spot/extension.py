@@ -20,9 +20,17 @@ import omni.ui as ui
 
 from .constants import (
     CAMERA_SPECS,
+    CARTER_CMD_VEL_TOPIC,
+    CARTER_ODOM_TOPIC,
+    CARTER_SCAN_TOPIC,
     CMD_VEL_TOPIC,
     ODOM_TOPIC,
     SCAN_TOPIC,
+)
+from .carter_ros_graphs import (
+    setup_carter_cmd_vel_graph,
+    setup_carter_odom_tf_graph,
+    setup_carter_scan_tf_graph,
 )
 from .ros_graphs import setup_camera_graph, setup_cmd_vel_graph, setup_slam_sensors
 from .scene import SpotFireRescue
@@ -52,6 +60,12 @@ class Cobot3SpotExtension(omni.ext.IExt):
                 ui.Button("4. Setup LiDAR/SLAM", clicked_fn=self._setup_slam_sensors)
                 ui.Spacer(height=4)
 
+                ui.Label("[ Carter ROS2 그래프 ]", style={"font_size": 12})
+                ui.Button("C1. Setup Carter CmdVel", clicked_fn=self._setup_carter_cmd_vel)
+                ui.Button("C2. Setup Carter Odom/TF", clicked_fn=self._setup_carter_odom_tf)
+                ui.Button("C3. Setup Carter LiDAR/Scan", clicked_fn=self._setup_carter_scan_tf)
+                ui.Spacer(height=4)
+
                 ui.Label("[ 제어 ]", style={"font_size": 12})
                 ui.Button("Start Teleop Terminal", clicked_fn=self._start_teleop)
                 ui.Button("Stop Teleop Terminal", clicked_fn=self._stop_teleop)
@@ -67,6 +81,10 @@ class Cobot3SpotExtension(omni.ext.IExt):
                     ui.Label(f"{spec['label']} RGB: {spec['color_topic']}", style={"font_size": 11})
                     ui.Label(f"{spec['label']} DEPTH: {spec['depth_topic']}", style={"font_size": 11})
                     ui.Label(f"{spec['label']} INFO: {spec['camera_info_topic']}", style={"font_size": 11})
+                ui.Spacer(height=2)
+                ui.Label(CARTER_CMD_VEL_TOPIC, style={"font_size": 11})
+                ui.Label(CARTER_ODOM_TOPIC, style={"font_size": 11})
+                ui.Label(CARTER_SCAN_TOPIC, style={"font_size": 11})
 
         print("[cobot3.spot] UI 준비 완료")
 
@@ -89,6 +107,15 @@ class Cobot3SpotExtension(omni.ext.IExt):
 
     def _setup_slam_sensors(self):
         setup_slam_sensors(self._sample)
+
+    def _setup_carter_cmd_vel(self):
+        setup_carter_cmd_vel_graph()
+
+    def _setup_carter_odom_tf(self):
+        setup_carter_odom_tf_graph()
+
+    def _setup_carter_scan_tf(self):
+        setup_carter_scan_tf_graph()
 
     def _start_teleop(self):
         self._teleop.start()
