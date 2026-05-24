@@ -61,6 +61,8 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 DEFAULT_VIDEO_MAX_WIDTH = 640
 DEFAULT_VIDEO_MAX_HEIGHT = 360
 ANNOTATED_IMAGE_STALE_SEC = 1.0
+MAP_UPDATE_PERIOD_SEC = 0.5
+STATUS_UPDATE_PERIOD_SEC = 1.0
 
 
 def _prefer_pyqt_platform_plugins():
@@ -209,20 +211,23 @@ class MonitorRosNode(Node):
     # ── callbacks ──
 
     def _on_image(self, camera_name: str, msg: Image, annotated: bool):
+        now = time.monotonic()
+        if not annotated:
+            with self._lock:
+                annotated_age = (
+                    now - self._last_annotated_image_time.get(camera_name, 0.0)
+                )
+            if annotated_age < ANNOTATED_IMAGE_STALE_SEC:
+                return
+
         try:
             arr = self._bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         except Exception:
             return
         arr = self._downsample_image(arr)
-        now = time.monotonic()
         with self._lock:
             if annotated:
                 self._last_annotated_image_time[camera_name] = now
-            elif (
-                now - self._last_annotated_image_time.get(camera_name, 0.0)
-                < ANNOTATED_IMAGE_STALE_SEC
-            ):
-                return
             self._images[camera_name] = arr
 
     @staticmethod
@@ -1666,6 +1671,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_panel.delete_survivor_requested.connect(self._delete_survivor)
 
         # Periodic update
+        self._last_map_update = 0.0
+        self._last_status_update = 0.0
         timer = QtCore.QTimer(self)
         timer.timeout.connect(self._tick)
         timer.start(200)  # 5 Hz
@@ -1679,8 +1686,15 @@ class MainWindow(QtWidgets.QMainWindow):
         images = snap['images']
         for name, panel in self.image_panels.items():
             panel.update_image(images.get(name))
-        self.map_panel.update_state(snap)
-        self.status_panel.update_state(snap, time.time() - self._t0)
+
+        now = time.monotonic()
+        if (self._map_widget is self.map_panel
+                and now - self._last_map_update >= MAP_UPDATE_PERIOD_SEC):
+            self.map_panel.update_state(snap)
+            self._last_map_update = now
+        if now - self._last_status_update >= STATUS_UPDATE_PERIOD_SEC:
+            self.status_panel.update_state(snap, time.time() - self._t0)
+            self._last_status_update = now
 
     @staticmethod
     def _use_embedded_rviz() -> bool:

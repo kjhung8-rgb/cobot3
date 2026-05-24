@@ -8,7 +8,7 @@
 #   5. coverage_path_planner (camera-coverage waypoint exploration)
 #   6. yolo_detector (YOLOv8 RGB-D localization on front camera)
 #   7. survivor_pose_to_marker (PoseStamped -> RViz X; 테스트: ros2 topic pub --once ...)
-#   8. RViz with combined view
+#   8. Optional RViz with combined view
 #
 # Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,*_cam/*}.
 
@@ -91,7 +91,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "launch_rviz",
-                default_value="true",
+                default_value="false",
                 description="Start the standalone RViz window.",
             ),
             Node(
@@ -155,6 +155,8 @@ def generate_launch_description():
                             # 4 m camera range. Waypoint spacing is slightly
                             # wider to reduce total waypoint count.
                             {"max_range_m": 4.0},
+                            {"n_rays": 50},
+                            {"update_rate_hz": 2.0},
                         ],
                     ),
                 ],
