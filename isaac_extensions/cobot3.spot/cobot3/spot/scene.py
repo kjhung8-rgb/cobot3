@@ -16,9 +16,7 @@ from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.robot.policy.examples.robots import SpotFlatTerrainPolicy
 
 from .constants import (
-    FRONT_CAMERA_PRIM_PATH,
-    FRONT_CAMERA_ROTATION_XYZ_DEG,
-    FRONT_CAMERA_TRANSLATION,
+    CAMERA_SPECS,
     SPOT_PRIM_PATH,
     SPOT_SPAWN_POSITION,
     SPOT_SPAWN_YAW_DEG,
@@ -26,7 +24,7 @@ from .constants import (
 
 
 SPOT_EXTENSION_DIR = Path(__file__).resolve().parents[2]
-WAREHOUSE_USD_PATH = SPOT_EXTENSION_DIR / "usd" / "sujung_warehouse.usd"
+WAREHOUSE_USD_PATH = SPOT_EXTENSION_DIR / "usd" / "warehouse_small.usd"
 
 
 def _yaw_to_quat_wxyz(yaw_deg):
@@ -81,7 +79,7 @@ class SpotFireRescue(BaseSample):
         print("[cobot3.spot] Warehouse 로드 완료")
 
         # Spawn at the warehouse entrance facing the interior (-Y direction).
-        # Z is set well above floor (~0.53 in sujung_warehouse) so physics
+        # Z is set well above floor so physics
         # drops Spot onto the floor cleanly.
         self.spot = SpotFlatTerrainPolicy(
             prim_path=SPOT_PRIM_PATH,
@@ -90,37 +88,37 @@ class SpotFireRescue(BaseSample):
         )
         print("[cobot3.spot] Spot RL 정책 로드 완료")
 
-        self._add_front_camera()
+        self._add_cameras()
 
         timeline = omni.timeline.get_timeline_interface()
         self._event_timer_callback = timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
             int(omni.timeline.TimelineEventType.PLAY), self._on_timeline_play
         )
 
-    def _add_front_camera(self):
-        """Add a front camera prim used by YOLO/depth localization."""
+    def _add_cameras(self):
+        """Add camera prims used by YOLO/depth localization."""
         import omni.kit.commands
 
         stage = omni.usd.get_context().get_stage()
-        created = False
-        if not stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH).IsValid():
-            omni.kit.commands.execute(
-                "CreatePrimWithDefaultXform",
-                prim_type="Camera",
-                prim_path=FRONT_CAMERA_PRIM_PATH,
-            )
-            created = True
+        for spec in CAMERA_SPECS:
+            prim_path = spec["prim_path"]
+            created = False
+            if not stage.GetPrimAtPath(prim_path).IsValid():
+                omni.kit.commands.execute(
+                    "CreatePrimWithDefaultXform",
+                    prim_type="Camera",
+                    prim_path=prim_path,
+                )
+                created = True
 
-        cam_prim = stage.GetPrimAtPath(FRONT_CAMERA_PRIM_PATH)
-        xform = UsdGeom.Xformable(cam_prim)
-        xform.ClearXformOpOrder()
-        xform.AddTranslateOp().Set(Gf.Vec3d(*FRONT_CAMERA_TRANSLATION))
-        xform.AddRotateXYZOp().Set(Gf.Vec3f(*FRONT_CAMERA_ROTATION_XYZ_DEG))
+            cam_prim = stage.GetPrimAtPath(prim_path)
+            xform = UsdGeom.Xformable(cam_prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*spec["translation"]))
+            xform.AddRotateXYZOp().Set(Gf.Vec3f(*spec["usd_rotation_xyz_deg"]))
 
-        if created:
-            print("[cobot3.spot] 전방 카메라 추가 완료")
-        else:
-            print("[cobot3.spot] 전방 카메라 pose 업데이트 완료")
+            action = "추가" if created else "pose 업데이트"
+            print(f"[cobot3.spot] {spec['label']} 카메라 {action} 완료")
 
     async def setup_post_load(self):
         self._physics_ready = False
