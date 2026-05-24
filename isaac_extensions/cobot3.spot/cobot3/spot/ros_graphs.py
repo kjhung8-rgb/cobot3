@@ -217,7 +217,7 @@ def setup_camera_graph(sample):
 # ─────────────────────────────────────────────
 # LiDAR helper
 # ─────────────────────────────────────────────
-LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, 0.35)
+LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, -0.4)
 LIDAR_ORIENTATION = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
 LIDAR_TF_ROTATION_XYZW = [0.0, 0.0, 0.0, 1.0]
 

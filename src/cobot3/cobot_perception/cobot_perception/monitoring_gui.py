@@ -23,8 +23,7 @@ Layout
     검색 순서:
         1. $COBOT_SURVIVOR_CAPTURE_DIR
         2. ./src/yolo/dectected_person
-        3. ~/dev_ws/cobot3/src/yolo/dectected_person
-        4. /home/rokey/dev_ws/cobot3/src/yolo/dectected_person
+        3. <project root>/src/yolo/dectected_person
 """
 
 from __future__ import annotations
@@ -42,8 +41,8 @@ import rclpy
 import tf2_ros
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped, Twist
-from nav_msgs.msg import OccupancyGrid
-from rclpy.executors import SingleThreadedExecutor
+from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
@@ -107,6 +106,7 @@ class MonitorRosNode(Node):
         self._zones: Optional[MarkerArray] = None
         self._waypoints: Optional[MarkerArray] = None
         self._survivors: List[Survivor] = []
+        self._robot_velocity: Optional[tuple[float, float, float]] = None
         self._next_survivor_id = 1
         self._control_mode = 'autonomous'
 
@@ -148,6 +148,7 @@ class MonitorRosNode(Node):
                                  self._on_waypoints, latched)
         self.create_subscription(PoseStamped, '/detected_survivor_pose',
                                  self._on_survivor, 10)
+        self.create_subscription(Odometry, '/spot_0/odom', self._on_odom, 10)
         self._survivor_delete_pub = self.create_publisher(
             Int32, '/survivor_delete_id', 10
         )
@@ -240,6 +241,12 @@ class MonitorRosNode(Node):
             self._next_survivor_id += 1
             self._survivors.append(s)
 
+    def _on_odom(self, msg: Odometry):
+        linear = msg.twist.twist.linear.x
+        angular = msg.twist.twist.angular.z
+        with self._lock:
+            self._robot_velocity = (linear, angular, time.time())
+
     def _tick_tf(self):
         try:
             tf = self._tf_buffer.lookup_transform(
@@ -269,6 +276,7 @@ class MonitorRosNode(Node):
                 'zones': self._zones,
                 'waypoints': self._waypoints,
                 'survivors': list(self._survivors),
+                'robot_velocity': self._robot_velocity,
                 'control_mode': self._control_mode,
             }
 
@@ -334,6 +342,8 @@ def ros_thread_main(node: MonitorRosNode):
     executor.add_node(node)
     try:
         executor.spin()
+    except ExternalShutdownException:
+        pass
     finally:
         node.destroy_node()
 
@@ -385,6 +395,7 @@ class MapPanel(QtWidgets.QWidget):
         self._zones: Optional[MarkerArray] = None
         self._waypoints: Optional[MarkerArray] = None
         self._survivors: List[Survivor] = []
+        self._robot_velocity: Optional[tuple[float, float, float]] = None
         self._rotation_deg = 0
         self._zoom = 1.0
         self._pan_px = QtCore.QPointF(0.0, 0.0)
@@ -436,6 +447,7 @@ class MapPanel(QtWidgets.QWidget):
         self._zones = snap['zones']
         self._waypoints = snap['waypoints']
         self._survivors = snap['survivors']
+        self._robot_velocity = snap['robot_velocity']
         self.update()
 
     def paintEvent(self, event):  # noqa: N802 (Qt API)
@@ -485,6 +497,7 @@ class MapPanel(QtWidgets.QWidget):
 
         p.resetTransform()
         self._draw_rotation_label(p)
+        self._draw_velocity_label(p)
 
     def _reference_grid(self) -> Optional[OccupancyGrid]:
         return self._map or self._costmap or self._cov
@@ -751,6 +764,29 @@ class MapPanel(QtWidgets.QWidget):
             f'rotation {self._rotation_deg:+d}°  zoom {self._zoom:.2f}x',
         )
 
+    def _draw_velocity_label(self, painter: QtGui.QPainter):
+        if self._robot_velocity is None:
+            text = '선속도 -- m/s   각속도 -- rad/s'
+        else:
+            linear, angular, t_recv = self._robot_velocity
+            age = time.time() - t_recv
+            if age > 1.5:
+                text = '선속도 -- m/s   각속도 -- rad/s'
+            else:
+                text = f'선속도 {linear:+.2f} m/s   각속도 {angular:+.2f} rad/s'
+
+        font = QtGui.QFont('Sans', 10, QtGui.QFont.Bold)
+        painter.setFont(font)
+        metrics = QtGui.QFontMetrics(font)
+        text_rect = metrics.boundingRect(text).adjusted(-8, -5, 8, 5)
+        text_rect.moveBottomLeft(QtCore.QPoint(12, self.height() - 12))
+
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(17, 24, 39, 210))
+        painter.drawRoundedRect(QtCore.QRectF(text_rect), 4, 4)
+        painter.setPen(QtGui.QColor('#e5e7eb'))
+        painter.drawText(text_rect, QtCore.Qt.AlignCenter, text)
+
 
 class LatestCapturePanel(QtWidgets.QGroupBox):
     def __init__(self):
@@ -785,10 +821,10 @@ class LatestCapturePanel(QtWidgets.QGroupBox):
         env_dir = os.environ.get('COBOT_SURVIVOR_CAPTURE_DIR')
         if env_dir:
             dirs.append(Path(env_dir).expanduser())
+        project_root = Path(__file__).resolve().parents[5]
         dirs.extend([
             Path.cwd() / 'src/yolo/dectected_person',
-            Path.home() / 'dev_ws/cobot3/src/yolo/dectected_person',
-            Path('/home/rokey/dev_ws/cobot3/src/yolo/dectected_person'),
+            project_root / 'src/yolo/dectected_person',
         ])
 
         unique = []

@@ -145,8 +145,8 @@ def generate_launch_description():
                                     "/spot_0/right_cam/camera_info",
                                 ],
                             },
-                            # 4 m: matches waypoint spacing in CPP, faster
-                            # coverage growth, fewer waypoints to visit.
+                            # 4 m camera range. Waypoint spacing is slightly
+                            # wider to reduce total waypoint count.
                             {"max_range_m": 4.0},
                         ],
                     ),
@@ -218,17 +218,17 @@ def generate_launch_description():
                         output="screen",
                         parameters=[
                             {"use_sim_time": use_sim_time},
-                            {"waypoint_spacing_m": 4.0},
-                            {"do_spin_at_waypoint": True},
-                            {"spin_duration_sec": 4.0},
-                            {"spin_speed_rad_s": float(speed["default_angular_radps"])},
+                            {"waypoint_spacing_m": 4.5},
+                            {"do_spin_at_waypoint": False},
+                            {"spin_duration_sec": 11.0},
+                            {"spin_speed_rad_s": 0.6},
                             {"skip_already_seen": True},
                             {"use_start_pose_as_home": True},
                             {"auto_return_enabled": True},
                             {"auto_return_coverage_threshold": 0.95},
                             {"auto_return_hold_sec": 5.0},
-                            # Zone partitioning: 15m × 15m. With 4m
-                            # waypoint spacing each zone has ~12 waypoints
+                            # Zone partitioning: 15m × 15m. With 4.5m
+                            # waypoint spacing each zone has ~9-11 waypoints
                             # → meaningful "stay and finish current area
                             # before moving on" behaviour.
                             {"zone_size_m": 15.0},
