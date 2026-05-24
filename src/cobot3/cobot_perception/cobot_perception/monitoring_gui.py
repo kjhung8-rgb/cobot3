@@ -4,57 +4,23 @@ Layout
 ======
 
     +-------------------+-------------------+-------------------+
-    |  Left YOLO cam    |  Center YOLO cam  |  Right YOLO cam   |
+    |      왼쪽 CAM      |      중앙 CAM      |     오른쪽 CAM      |
     +-------------------+-------------------+-------------------+
-    |  2D top-down map view                           |
-    |  (SLAM map + camera coverage + robot + survivor)|
-    +-------------------------------------------------+
-    |  Status panel      Survivor list + captures     |
-    |  - elapsed time           |  - detected survivor count |
-    |  - current zone           |  - survivor pose list      |
-    |  - waypoint progress      |  - delete survivor button  |
-    |  - camera coverage %      |  - latest survivor image   |
-    +---------------------------+----------------------------+
-
-Topics consumed
----------------
-    /spot_0/yolo/left_annotated_image   sensor_msgs/Image
-    /spot_0/yolo/annotated_image        sensor_msgs/Image
-    /spot_0/yolo/right_annotated_image  sensor_msgs/Image
-        YOLO annotated RGB images displayed in the camera panels.
-
-    /map                          nav_msgs/OccupancyGrid
-        SLAM occupancy grid used as the base map for the top-down view.
-
-    /camera_coverage              nav_msgs/OccupancyGrid
-        Camera coverage grid overlaid on the SLAM map.
-
-    /coverage_zones               visualization_msgs/MarkerArray
-        Coverage zone markers. The current zone is inferred from the
-        green TEXT_VIEW_FACING marker.
-
-    /coverage_waypoints           visualization_msgs/MarkerArray
-        Coverage waypoint markers. Gray markers are treated as visited
-        waypoints for progress calculation.
-
-    /detected_survivor_pose       geometry_msgs/PoseStamped
-        One-shot survivor pose in the map frame. The GUI keeps a local
-        deduplicated list using a 0.5 m distance threshold.
-
-    TF: map -> spot_0/base_link
-        Robot position used for drawing the robot marker on the map.
-
-Topics published
-----------------
-    /survivor_delete_id           std_msgs/Int32
-        Survivor delete request from the GUI.
-        - 0 clears all local survivor records.
-        - positive ID deletes the matching survivor.
-
-Image files
+    |  2D 상단 뷰 지도                                             |
+    |  (SLAM 지도 + 카메라 시야 범위 + 로봇 + 생존자)                  |
+    +-----------------------------------------------------------+
+    |  제어 패널 (모드 전환, 수동 조작, 복귀)                          |
+    +-----------------------------------------------------------+
+    |  상태 패널                 생존자 목록 + 캡처 이미지            |
+    |  - 경과 시간            |  - 탐지된 생존자 수                  |
+    |  - 현재 구역            |  - 생존자 위치 목록                  |
+    |  - 웨이포인트 진행률      |  - 생존자 삭제 버튼                  |
+    |  - 카메라 커버리지 %      |  - 최신 생존자 이미지                |
+    +------------------------+--------------------------------+
+이미지 파일
 -----------
-    The latest survivor capture is loaded from survivor_*.jpg/jpeg/png files.
-    Search order:
+    최신 생존자 캡처 이미지는 survivor_*.jpg/jpeg/png 파일에서 불러옵니다.
+    검색 순서:
         1. $COBOT_SURVIVOR_CAPTURE_DIR
         2. ./src/yolo/dectected_person
         3. ~/dev_ws/cobot3/src/yolo/dectected_person
@@ -190,6 +156,9 @@ class MonitorRosNode(Node):
         )
         self._explore_resume_pub = self.create_publisher(
             Bool, '/explore/resume', 10
+        )
+        self._return_home_pub = self.create_publisher(
+            Bool, '/coverage_planner/return_home', 10
         )
         self._teleop_pub = self.create_publisher(
             Twist, '/teleop_cmd_vel', 10
@@ -343,6 +312,11 @@ class MonitorRosNode(Node):
     def publish_teleop_stop(self):
         for _ in range(3):
             self.publish_teleop(0.0, 0.0)
+
+    def request_return_home(self):
+        msg = Bool()
+        msg.data = True
+        self._return_home_pub.publish(msg)
 
     def _publish_control_mode(self, mode: str):
         msg = String()
@@ -929,7 +903,7 @@ class StatusPanel(QtWidgets.QWidget):
         add_metric('경과 시간', self.elapsed_lbl)
         add_metric('현재 zone', self.zone_lbl)
         add_metric('Waypoint 진행', self.progress_lbl)
-        add_metric('카메라 커버리지', self.coverage_lbl)
+        add_metric('전체맵 탐색률', self.coverage_lbl)
         status_layout.addStretch()
 
         # Survivor section
@@ -1189,9 +1163,12 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_layout.setSpacing(10)
         self.auto_btn = QtWidgets.QPushButton('자율탐사')
         self.manual_btn = QtWidgets.QPushButton('수동조작')
-        for btn in (self.auto_btn, self.manual_btn):
+        self.return_home_btn = QtWidgets.QPushButton('강제 복귀')
+        for btn in (self.auto_btn, self.manual_btn, self.return_home_btn):
             btn.setCheckable(True)
             btn.setMinimumHeight(34)
+        self.return_home_btn.setCheckable(False)
+        self.return_home_btn.setToolTip('탐색을 중단하고 시작 위치로 복귀')
         self.auto_btn.setChecked(True)
         self.mode_status_lbl = QtWidgets.QLabel('자율탐사 모드')
         self.mode_status_lbl.setStyleSheet('color: #9ca3af;')
@@ -1199,8 +1176,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.teleop_speed_lbl.setStyleSheet('color: #9ca3af;')
         self.auto_btn.clicked.connect(self._set_autonomous_mode)
         self.manual_btn.clicked.connect(self._set_manual_mode)
+        self.return_home_btn.clicked.connect(self._request_return_home)
         mode_layout.addWidget(self.auto_btn)
         mode_layout.addWidget(self.manual_btn)
+        mode_layout.addWidget(self.return_home_btn)
         mode_layout.addSpacing(12)
         mode_layout.addWidget(self.mode_status_lbl)
         mode_layout.addStretch()
@@ -1297,6 +1276,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.auto_btn.setChecked(False)
         self.manual_btn.setChecked(True)
         self.mode_status_lbl.setText('수동조작 모드')
+        self.setFocus()
+
+    def _request_return_home(self, checked=False):
+        self._control_mode = 'autonomous'
+        self._pressed_keys.clear()
+        self._ros.set_control_mode('autonomous')
+        self._ros.request_return_home()
+        self._reset_teleop_speed()
+        self.auto_btn.setChecked(True)
+        self.manual_btn.setChecked(False)
+        self.mode_status_lbl.setText('원점 복귀 요청')
         self.setFocus()
 
     def _teleop_speed_text(self) -> str:

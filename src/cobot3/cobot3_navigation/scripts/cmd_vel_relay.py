@@ -2,9 +2,9 @@
 """Relay gated velocity commands to Isaac Sim Spot bridge topic.
 
 When ``enable_person_dampening`` is true the relay also listens to
-``person_detected_topic`` (Bool) and dampens linear/angular velocity for
-``dampening_hold_sec`` after each True message. This makes the robot
-linger when YOLO spots a survivor so the camera has time to dwell.
+``slowdown_required_topic`` (Bool) and dampens linear/angular velocity
+for ``dampening_hold_sec`` after each True message. This makes the robot
+linger when YOLO sees a survivor that still needs localization.
 
 Control modes:
     autonomous: relay Nav2 /cmd_vel to /spot_0/cmd_vel
@@ -21,7 +21,7 @@ class CmdVelRelay(Node):
         super().__init__("cmd_vel_relay")
 
         self.declare_parameter("enable_person_dampening", False)
-        self.declare_parameter("person_detected_topic", "/spot_0/yolo/person_detected")
+        self.declare_parameter("slowdown_required_topic", "/spot_0/yolo/slowdown_required")
         self.declare_parameter("dampening_factor", 0.5)
         self.declare_parameter("dampening_hold_sec", 2.0)
         self.declare_parameter("control_mode_topic", "/control_mode")
@@ -29,7 +29,7 @@ class CmdVelRelay(Node):
         self.declare_parameter("default_control_mode", "autonomous")
 
         self._enable_dampen = self.get_parameter("enable_person_dampening").value
-        det_topic = self.get_parameter("person_detected_topic").value
+        slowdown_topic = self.get_parameter("slowdown_required_topic").value
         self._factor = float(self.get_parameter("dampening_factor").value)
         self._hold_sec = float(self.get_parameter("dampening_hold_sec").value)
         self._mode = str(self.get_parameter("default_control_mode").value).strip().lower()
@@ -56,10 +56,13 @@ class CmdVelRelay(Node):
 
         self._last_detect_ns: int = 0
         if self._enable_dampen:
-            self._det_sub = self.create_subscription(Bool, det_topic, self._on_detect, 10)
+            self._det_sub = self.create_subscription(
+                Bool, slowdown_topic, self._on_detect, 10
+            )
             self.get_logger().info(
                 f"Relaying gated cmd_vel -> /spot_0/cmd_vel "
-                f"(dampening x{self._factor:.2f} for {self._hold_sec:.1f}s after detection on {det_topic})"
+                f"(dampening x{self._factor:.2f} for {self._hold_sec:.1f}s "
+                f"after slowdown request on {slowdown_topic})"
             )
         else:
             self.get_logger().info("Relaying gated cmd_vel -> /spot_0/cmd_vel")

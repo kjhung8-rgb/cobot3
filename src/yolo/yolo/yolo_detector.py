@@ -74,6 +74,7 @@ class SurvivorDetector(Node):
         self.declare_parameter("camera_info_topics", ["/spot_0/front_cam/camera_info"])
         self.declare_parameter("annotated_topics", ["/spot_0/yolo/annotated_image"])
         self.declare_parameter("detected_topic", "/spot_0/yolo/person_detected")
+        self.declare_parameter("slowdown_required_topic", "/spot_0/yolo/slowdown_required")
         self.declare_parameter("base_pose_topic", "/spot_0/yolo/person_pose_base")
         self.declare_parameter("survivor_pose_topic", "/detected_survivor_pose")
         self.declare_parameter("survivor_delete_topic", "/survivor_delete_id")
@@ -118,6 +119,7 @@ class SurvivorDetector(Node):
         annotated_topic = self.get_parameter("annotated_topic").value
         multi_camera = bool(self.get_parameter("multi_camera").value)
         detected_topic = self.get_parameter("detected_topic").value
+        slowdown_required_topic = self.get_parameter("slowdown_required_topic").value
         base_pose_topic = self.get_parameter("base_pose_topic").value
         survivor_pose_topic = self.get_parameter("survivor_pose_topic").value
         survivor_delete_topic = self.get_parameter("survivor_delete_topic").value
@@ -270,6 +272,9 @@ class SurvivorDetector(Node):
             )
 
         self.pub_detected = self.create_publisher(Bool, detected_topic, 10)
+        self.pub_slowdown_required = self.create_publisher(
+            Bool, slowdown_required_topic, 10
+        )
         self.pub_base_pose = self.create_publisher(PoseStamped, base_pose_topic, 10)
         self.pub_survivor_pose = self.create_publisher(
             PoseStamped, survivor_pose_topic, 10
@@ -293,11 +298,12 @@ class SurvivorDetector(Node):
             for stream in self.camera_streams
         )
         self.get_logger().info(
-            "subscribed cameras=%s; publishing detected=%s base_pose=%s "
-            "survivor_pose=%s target_frame=%s delete_topic=%s"
+            "subscribed cameras=%s; publishing detected=%s slowdown=%s "
+            "base_pose=%s survivor_pose=%s target_frame=%s delete_topic=%s"
             % (
                 camera_summary,
                 detected_topic,
+                slowdown_required_topic,
                 base_pose_topic,
                 survivor_pose_topic,
                 self.target_frame,
@@ -382,6 +388,7 @@ class SurvivorDetector(Node):
 
         self._frame_count += 1
         if not boxes:
+            self._publish_slowdown_required(False)
             if self._frame_count % 30 == 0:
                 self.get_logger().info(
                     f"{stream.name} frame {self._frame_count}: no survivor"
@@ -389,6 +396,7 @@ class SurvivorDetector(Node):
             return
 
         if stream.camera_info is None:
+            self._publish_slowdown_required(True)
             self.get_logger().warn(
                 f"No CameraInfo yet for {stream.name}; cannot localize survivor"
             )
@@ -399,11 +407,14 @@ class SurvivorDetector(Node):
 
         candidates = self._localizable_boxes(boxes, depth, depth_msg.encoding)
         if not candidates:
+            self._publish_slowdown_required(True)
             self.get_logger().warn("Detected person, but no valid person-depth sample")
             return
 
         stream.last_pose_pub_time = self.get_clock().now()
         frame_targets: list[PoseStamped] = []
+        localized_any = False
+        slowdown_required = False
 
         for box, u, v, depth_m in candidates:
             camera_point = self._pixel_depth_to_camera_point(
@@ -422,6 +433,7 @@ class SurvivorDetector(Node):
             target_pose = self._transform_pose(base_pose, self.target_frame)
             if target_pose is None:
                 continue
+            localized_any = True
             if self.project_to_ground:
                 target_pose.pose.position.z = 0.0
 
@@ -432,6 +444,13 @@ class SurvivorDetector(Node):
                 continue
             frame_targets.append(self._copy_pose(target_pose))
 
+            known_index, _ = self._nearest_confirmed_survivor_index(
+                target_pose, self.survivor_match_radius
+            )
+            if known_index is not None:
+                continue
+
+            slowdown_required = True
             survivor_id = self._accept_new_survivor(target_pose)
             if survivor_id is None:
                 continue
@@ -464,6 +483,8 @@ class SurvivorDetector(Node):
                 )
             )
 
+        self._publish_slowdown_required(slowdown_required or not localized_any)
+
     def _predict(self, frame):
         classes = [PERSON_CLASS_ID] if self.person_only else None
         return self.model.predict(
@@ -474,6 +495,11 @@ class SurvivorDetector(Node):
             imgsz=self.imgsz,
             verbose=False,
         )[0]
+
+    def _publish_slowdown_required(self, required: bool):
+        msg = Bool()
+        msg.data = bool(required)
+        self.pub_slowdown_required.publish(msg)
 
     def _publish_annotated(self, stream: CameraStream, result, header):
         if stream.pub_image.get_subscription_count() == 0:
