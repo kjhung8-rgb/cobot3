@@ -4,7 +4,26 @@ yolo_detector:
     depth_topic: /spot_0/front_cam/depth_image
     camera_info_topic: /spot_0/front_cam/camera_info
     annotated_topic: /spot_0/yolo/annotated_image
+    multi_camera: true
+    camera_names: [front, left, right]
+    image_topics:
+      - /spot_0/front_cam/color_image
+      - /spot_0/left_cam/color_image
+      - /spot_0/right_cam/color_image
+    depth_topics:
+      - /spot_0/front_cam/depth_image
+      - /spot_0/left_cam/depth_image
+      - /spot_0/right_cam/depth_image
+    camera_info_topics:
+      - /spot_0/front_cam/camera_info
+      - /spot_0/left_cam/camera_info
+      - /spot_0/right_cam/camera_info
+    annotated_topics:
+      - /spot_0/yolo/annotated_image
+      - /spot_0/yolo/left_annotated_image
+      - /spot_0/yolo/right_annotated_image
     detected_topic: /spot_0/yolo/person_detected
+    slowdown_required_topic: /spot_0/yolo/slowdown_required
     base_pose_topic: /spot_0/yolo/person_pose_base
     survivor_pose_topic: /detected_survivor_pose
     survivor_delete_topic: /survivor_delete_id
@@ -13,8 +32,8 @@ yolo_detector:
     confidence_threshold: 0.4
     device: cuda
     imgsz: 640
-    inference_period_sec: 0.1
-    annotated_publish_period_sec: 0.1
+    inference_period_sec: 0.2
+    annotated_publish_period_sec: 0.3
     person_only: true
     use_latest_tf: true
     tf_timeout_sec: 0.2

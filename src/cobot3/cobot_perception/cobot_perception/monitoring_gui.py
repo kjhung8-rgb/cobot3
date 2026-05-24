@@ -3,56 +3,24 @@
 Layout
 ======
 
-    +---------------------------+----------------------------+
-    |  YOLO annotated camera    |  2D top-down map view      |
-    |  (Image)                  |  (SLAM map + camera        |
-    |                           |   coverage + robot +       |
-    |                           |   survivor markers)        |
-    +---------------------------+----------------------------+
-    |  Status panel             |  Survivor list + captures  |
-    |  - elapsed time           |  - detected survivor count |
-    |  - current zone           |  - survivor pose list      |
-    |  - waypoint progress      |  - delete survivor button  |
-    |  - camera coverage %      |  - latest survivor image   |
-    +---------------------------+----------------------------+
-
-Topics consumed
----------------
-    /spot_0/yolo/annotated_image  sensor_msgs/Image
-        YOLO annotated RGB image displayed in the camera panel.
-
-    /map                          nav_msgs/OccupancyGrid
-        SLAM occupancy grid used as the base map for the top-down view.
-
-    /camera_coverage              nav_msgs/OccupancyGrid
-        Camera coverage grid overlaid on the SLAM map.
-
-    /coverage_zones               visualization_msgs/MarkerArray
-        Coverage zone markers. The current zone is inferred from the
-        green TEXT_VIEW_FACING marker.
-
-    /coverage_waypoints           visualization_msgs/MarkerArray
-        Coverage waypoint markers. Gray markers are treated as visited
-        waypoints for progress calculation.
-
-    /detected_survivor_pose       geometry_msgs/PoseStamped
-        One-shot survivor pose in the map frame. The GUI keeps a local
-        deduplicated list using a 0.5 m distance threshold.
-
-    TF: map -> spot_0/base_link
-        Robot position used for drawing the robot marker on the map.
-
-Topics published
-----------------
-    /survivor_delete_id           std_msgs/Int32
-        Survivor delete request from the GUI.
-        - 0 clears all local survivor records.
-        - positive ID deletes the matching survivor.
-
-Image files
+    +-------------------+-------------------+-------------------+
+    |      왼쪽 CAM      |      중앙 CAM      |     오른쪽 CAM      |
+    +-------------------+-------------------+-------------------+
+    |  2D 상단 뷰 지도                                             |
+    |  (SLAM 지도 + 카메라 시야 범위 + 로봇 + 생존자)                  |
+    +-----------------------------------------------------------+
+    |  제어 패널 (모드 전환, 수동 조작, 복귀)                          |
+    +-----------------------------------------------------------+
+    |  상태 패널                 생존자 목록 + 캡처 이미지            |
+    |  - 경과 시간            |  - 탐지된 생존자 수                  |
+    |  - 현재 구역            |  - 생존자 위치 목록                  |
+    |  - 웨이포인트 진행률      |  - 생존자 삭제 버튼                  |
+    |  - 카메라 커버리지 %      |  - 최신 생존자 이미지                |
+    +------------------------+--------------------------------+
+이미지 파일
 -----------
-    The latest survivor capture is loaded from survivor_*.jpg/jpeg/png files.
-    Search order:
+    최신 생존자 캡처 이미지는 survivor_*.jpg/jpeg/png 파일에서 불러옵니다.
+    검색 순서:
         1. $COBOT_SURVIVOR_CAPTURE_DIR
         2. ./src/yolo/dectected_person
         3. ~/dev_ws/cobot3/src/yolo/dectected_person
@@ -73,16 +41,20 @@ import numpy as np
 import rclpy
 import tf2_ros
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int32
+from std_msgs.msg import Bool, Int32, String
 from visualization_msgs.msg import MarkerArray
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+
+
+DEFAULT_VIDEO_MAX_WIDTH = 640
+DEFAULT_VIDEO_MAX_HEIGHT = 360
 
 
 def _prefer_pyqt_platform_plugins():
@@ -120,9 +92,14 @@ class MonitorRosNode(Node):
         self._lock = threading.Lock()
         self._bridge = CvBridge()
         self._t0 = launch_t0
+        self._video_max_size = self._read_video_max_size()
 
         # State
-        self._image: Optional[np.ndarray] = None
+        self._images: dict[str, Optional[np.ndarray]] = {
+            'left': None,
+            'center': None,
+            'right': None,
+        }
         self._map: Optional[OccupancyGrid] = None
         self._costmap: Optional[OccupancyGrid] = None
         self._coverage: Optional[OccupancyGrid] = None
@@ -131,6 +108,7 @@ class MonitorRosNode(Node):
         self._waypoints: Optional[MarkerArray] = None
         self._survivors: List[Survivor] = []
         self._next_survivor_id = 1
+        self._control_mode = 'autonomous'
 
         latched = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -144,8 +122,21 @@ class MonitorRosNode(Node):
             depth=1,
         )
 
-        self.create_subscription(Image, '/spot_0/yolo/annotated_image',
-                                 self._on_image, sensor)
+        image_topics = {
+            'left': '/spot_0/yolo/left_annotated_image',
+            'center': '/spot_0/yolo/annotated_image',
+            'right': '/spot_0/yolo/right_annotated_image',
+        }
+        self._image_subs = []
+        for camera_name, topic in image_topics.items():
+            self._image_subs.append(
+                self.create_subscription(
+                    Image,
+                    topic,
+                    lambda msg, name=camera_name: self._on_image(name, msg),
+                    sensor,
+                )
+            )
         self.create_subscription(OccupancyGrid, '/map', self._on_map, latched)
         self.create_subscription(OccupancyGrid, '/global_costmap/costmap',
                                  self._on_costmap, latched)
@@ -160,6 +151,18 @@ class MonitorRosNode(Node):
         self._survivor_delete_pub = self.create_publisher(
             Int32, '/survivor_delete_id', 10
         )
+        self._control_mode_pub = self.create_publisher(
+            String, '/control_mode', 10
+        )
+        self._explore_resume_pub = self.create_publisher(
+            Bool, '/explore/resume', 10
+        )
+        self._return_home_pub = self.create_publisher(
+            Bool, '/coverage_planner/return_home', 10
+        )
+        self._teleop_pub = self.create_publisher(
+            Twist, '/teleop_cmd_vel', 10
+        )
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -167,13 +170,39 @@ class MonitorRosNode(Node):
 
     # ── callbacks ──
 
-    def _on_image(self, msg: Image):
+    def _on_image(self, camera_name: str, msg: Image):
         try:
             arr = self._bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         except Exception:
             return
+        arr = self._downsample_image(arr)
         with self._lock:
-            self._image = arr
+            self._images[camera_name] = arr
+
+    @staticmethod
+    def _read_video_max_size() -> tuple[int, int]:
+        width = DEFAULT_VIDEO_MAX_WIDTH
+        height = DEFAULT_VIDEO_MAX_HEIGHT
+        try:
+            width = int(os.environ.get('COBOT_GUI_VIDEO_MAX_WIDTH', width))
+            height = int(os.environ.get('COBOT_GUI_VIDEO_MAX_HEIGHT', height))
+        except ValueError:
+            width = DEFAULT_VIDEO_MAX_WIDTH
+            height = DEFAULT_VIDEO_MAX_HEIGHT
+        return max(1, width), max(1, height)
+
+    def _downsample_image(self, arr: np.ndarray) -> np.ndarray:
+        max_w, max_h = self._video_max_size
+        h, w = arr.shape[:2]
+        scale = min(max_w / max(w, 1), max_h / max(h, 1), 1.0)
+        if scale >= 1.0:
+            return arr
+
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        y_idx = np.linspace(0, h - 1, new_h).astype(np.intp)
+        x_idx = np.linspace(0, w - 1, new_w).astype(np.intp)
+        return np.ascontiguousarray(arr[y_idx][:, x_idx])
 
     def _on_map(self, msg: OccupancyGrid):
         with self._lock:
@@ -229,7 +258,10 @@ class MonitorRosNode(Node):
     def snapshot(self):
         with self._lock:
             return {
-                'image': None if self._image is None else self._image.copy(),
+                'images': {
+                    name: None if image is None else image.copy()
+                    for name, image in self._images.items()
+                },
                 'map': self._map,
                 'costmap': self._costmap,
                 'coverage': self._coverage,
@@ -237,6 +269,7 @@ class MonitorRosNode(Node):
                 'zones': self._zones,
                 'waypoints': self._waypoints,
                 'survivors': list(self._survivors),
+                'control_mode': self._control_mode,
             }
 
     def delete_survivor(self, survivor_id: int):
@@ -252,6 +285,48 @@ class MonitorRosNode(Node):
                 self._survivors = [
                     s for s in self._survivors if s.survivor_id != survivor_id
                 ]
+
+    def set_control_mode(self, mode: str):
+        mode = mode.strip().lower()
+        if mode not in ('autonomous', 'manual'):
+            return
+
+        if mode == 'manual':
+            self.publish_teleop_stop()
+            self._publish_explore_resume(False)
+            self._publish_control_mode('manual')
+        else:
+            self.publish_teleop_stop()
+            self._publish_control_mode('autonomous')
+            self._publish_explore_resume(True)
+
+        with self._lock:
+            self._control_mode = mode
+
+    def publish_teleop(self, linear_x: float = 0.0, angular_z: float = 0.0):
+        msg = Twist()
+        msg.linear.x = float(linear_x)
+        msg.angular.z = float(angular_z)
+        self._teleop_pub.publish(msg)
+
+    def publish_teleop_stop(self):
+        for _ in range(3):
+            self.publish_teleop(0.0, 0.0)
+
+    def request_return_home(self):
+        msg = Bool()
+        msg.data = True
+        self._return_home_pub.publish(msg)
+
+    def _publish_control_mode(self, mode: str):
+        msg = String()
+        msg.data = mode
+        self._control_mode_pub.publish(msg)
+
+    def _publish_explore_resume(self, resume: bool):
+        msg = Bool()
+        msg.data = bool(resume)
+        self._explore_resume_pub.publish(msg)
 
 
 def ros_thread_main(node: MonitorRosNode):
@@ -269,15 +344,16 @@ def ros_thread_main(node: MonitorRosNode):
 
 
 class ImagePanel(QtWidgets.QLabel):
-    def __init__(self):
+    def __init__(self, waiting_text='No Image'):
         super().__init__()
-        self.setMinimumSize(480, 360)
+        self._waiting_text = waiting_text
+        self.setMinimumSize(320, 180)
         self.setAlignment(QtCore.Qt.AlignCenter)
         self.setStyleSheet(
             'background-color: #1f2937; color: #9ca3af;'
             'border: 1px solid #374151;'
         )
-        self.setText('No Image\n(Setup Camera in Isaac Sim?)')
+        self.setText(f'{self._waiting_text}\n(Setup Camera in Isaac Sim?)')
 
     def update_image(self, arr: Optional[np.ndarray]):
         if arr is None:
@@ -322,6 +398,7 @@ class MapPanel(QtWidgets.QWidget):
             'robot': True,
             'survivors': True,
         }
+        self._image_cache: dict[str, tuple[tuple, QtGui.QImage]] = {}
 
     def set_layer_visible(self, layer: str, visible: bool):
         if layer not in self._layers:
@@ -378,13 +455,21 @@ class MapPanel(QtWidgets.QWidget):
         self._draw_grid(p, ref_grid)
 
         if self._layers['map'] and self._map is not None:
-            self._draw_grid_image(p, self._map, self._map_image(self._map))
+            self._draw_grid_image(
+                p, self._map, self._cached_grid_image('map', self._map, self._map_image)
+            )
 
         if self._layers['coverage'] and self._cov is not None:
-            self._draw_grid_image(p, self._cov, self._coverage_image(self._cov))
+            self._draw_grid_image(
+                p, self._cov,
+                self._cached_grid_image('coverage', self._cov, self._coverage_image),
+            )
 
         if self._layers['costmap'] and self._costmap is not None:
-            self._draw_grid_image(p, self._costmap, self._costmap_image(self._costmap))
+            self._draw_grid_image(
+                p, self._costmap,
+                self._cached_grid_image('costmap', self._costmap, self._costmap_image),
+            )
 
         if self._layers['zones'] and self._zones is not None:
             self._draw_zones(p, self._zones)
@@ -480,6 +565,30 @@ class MapPanel(QtWidgets.QWidget):
         if image.isNull():
             return
         painter.drawImage(self._grid_rect(grid), image)
+
+    def _cached_grid_image(self, name: str, grid: OccupancyGrid, factory):
+        key = self._grid_cache_key(grid)
+        cached = self._image_cache.get(name)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        image = factory(grid)
+        self._image_cache[name] = (key, image)
+        return image
+
+    @staticmethod
+    def _grid_cache_key(grid: OccupancyGrid) -> tuple:
+        info = grid.info
+        stamp = grid.header.stamp
+        return (
+            stamp.sec,
+            stamp.nanosec,
+            info.width,
+            info.height,
+            info.resolution,
+            info.origin.position.x,
+            info.origin.position.y,
+            len(grid.data),
+        )
 
     @staticmethod
     def _map_image(grid: OccupancyGrid) -> QtGui.QImage:
@@ -794,7 +903,7 @@ class StatusPanel(QtWidgets.QWidget):
         add_metric('경과 시간', self.elapsed_lbl)
         add_metric('현재 zone', self.zone_lbl)
         add_metric('Waypoint 진행', self.progress_lbl)
-        add_metric('카메라 커버리지', self.coverage_lbl)
+        add_metric('전체맵 탐색률', self.coverage_lbl)
         status_layout.addStretch()
 
         # Survivor section
@@ -929,10 +1038,16 @@ class StatusPanel(QtWidgets.QWidget):
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    TELEOP_DEFAULT_LINEAR_SPEED = 0.5
+    TELEOP_DEFAULT_ANGULAR_SPEED = 1.0
+    TELEOP_MIN_SPEED = 0.1
+    TELEOP_MAX_SPEED = 3.0
+    TELEOP_SPEED_STEP = 0.1
+
     def __init__(self, ros_node: MonitorRosNode, launch_t0: float):
         super().__init__()
         self.setWindowTitle('Spot 생존자 탐색 모니터')
-        self.resize(1280, 840)
+        self.resize(1440, 1000)
         self.setStyleSheet('''
             QMainWindow, QWidget { background-color: #111827; color: #e5e7eb; }
             QGroupBox { border: 1px solid #374151; margin-top: 12px;
@@ -944,18 +1059,37 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._ros = ros_node
         self._t0 = launch_t0
+        self._control_mode = 'autonomous'
+        self._pressed_keys: set[int] = set()
+        self._teleop_linear_speed = self.TELEOP_DEFAULT_LINEAR_SPEED
+        self._teleop_angular_speed = self.TELEOP_DEFAULT_ANGULAR_SPEED
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         layout = QtWidgets.QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        # Top row: image + map
-        top_row = QtWidgets.QHBoxLayout()
-        image_box = QtWidgets.QGroupBox('YOLO 카메라')
-        image_layout = QtWidgets.QVBoxLayout(image_box)
-        self.image_panel = ImagePanel()
-        image_layout.addWidget(self.image_panel)
+        # Top row: left / center / right YOLO camera images
+        camera_row = QtWidgets.QHBoxLayout()
+        camera_row.setSpacing(8)
+        self.image_panels: dict[str, ImagePanel] = {}
+        for key, title in (
+                ('left', '왼쪽 cam'),
+                ('center', '중앙 cam'),
+                ('right', '오른쪽 cam')):
+            image_box = QtWidgets.QGroupBox(title)
+            image_layout = QtWidgets.QVBoxLayout(image_box)
+            image_layout.setContentsMargins(8, 10, 8, 8)
+            panel = ImagePanel(title)
+            self.image_panels[key] = panel
+            image_layout.addWidget(panel)
+            camera_row.addWidget(image_box, 1)
+        layout.addLayout(camera_row, 2)
 
         map_box = QtWidgets.QGroupBox('맵 + 로봇 + 생존자')
         map_layout = QtWidgets.QVBoxLayout(map_box)
@@ -1021,10 +1155,36 @@ class MainWindow(QtWidgets.QMainWindow):
 
         map_layout.addLayout(map_controls)
         map_layout.addWidget(self.map_panel)
+        layout.addWidget(map_box, 4)
 
-        top_row.addWidget(image_box, 1)
-        top_row.addWidget(map_box, 1)
-        layout.addLayout(top_row, 3)
+        mode_box = QtWidgets.QGroupBox('주행 모드')
+        mode_layout = QtWidgets.QHBoxLayout(mode_box)
+        mode_layout.setContentsMargins(12, 10, 12, 10)
+        mode_layout.setSpacing(10)
+        self.auto_btn = QtWidgets.QPushButton('자율탐사')
+        self.manual_btn = QtWidgets.QPushButton('수동조작')
+        self.return_home_btn = QtWidgets.QPushButton('강제 복귀')
+        for btn in (self.auto_btn, self.manual_btn, self.return_home_btn):
+            btn.setCheckable(True)
+            btn.setMinimumHeight(34)
+        self.return_home_btn.setCheckable(False)
+        self.return_home_btn.setToolTip('탐색을 중단하고 시작 위치로 복귀')
+        self.auto_btn.setChecked(True)
+        self.mode_status_lbl = QtWidgets.QLabel('자율탐사 모드')
+        self.mode_status_lbl.setStyleSheet('color: #9ca3af;')
+        self.teleop_speed_lbl = QtWidgets.QLabel(self._teleop_speed_text())
+        self.teleop_speed_lbl.setStyleSheet('color: #9ca3af;')
+        self.auto_btn.clicked.connect(self._set_autonomous_mode)
+        self.manual_btn.clicked.connect(self._set_manual_mode)
+        self.return_home_btn.clicked.connect(self._request_return_home)
+        mode_layout.addWidget(self.auto_btn)
+        mode_layout.addWidget(self.manual_btn)
+        mode_layout.addWidget(self.return_home_btn)
+        mode_layout.addSpacing(12)
+        mode_layout.addWidget(self.mode_status_lbl)
+        mode_layout.addStretch()
+        mode_layout.addWidget(self.teleop_speed_lbl)
+        layout.addWidget(mode_box, 0)
 
         # Bottom: left status metrics + center survivor list
         self.status_panel = StatusPanel()
@@ -1036,9 +1196,15 @@ class MainWindow(QtWidgets.QMainWindow):
         timer.timeout.connect(self._tick)
         timer.start(200)  # 5 Hz
 
+        self._teleop_timer = QtCore.QTimer(self)
+        self._teleop_timer.timeout.connect(self._publish_current_teleop)
+        self._teleop_timer.start(100)  # 10 Hz
+
     def _tick(self):
         snap = self._ros.snapshot()
-        self.image_panel.update_image(snap['image'])
+        images = snap['images']
+        for name, panel in self.image_panels.items():
+            panel.update_image(images.get(name))
         self.map_panel.update_state(snap)
         self.status_panel.update_state(snap, time.time() - self._t0)
 
@@ -1052,6 +1218,136 @@ class MainWindow(QtWidgets.QMainWindow):
         elif value < -180:
             value += 360
         self.map_rotation_slider.setValue(value)
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        if self._control_mode != 'manual':
+            return super().eventFilter(obj, event)
+
+        event_type = event.type()
+        if event_type not in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease):
+            return super().eventFilter(obj, event)
+
+        key = event.key()
+        if not self._is_teleop_key(key):
+            return super().eventFilter(obj, event)
+
+        if event_type == QtCore.QEvent.KeyPress:
+            if key == QtCore.Qt.Key_Q and not event.isAutoRepeat():
+                self._adjust_teleop_speed(+self.TELEOP_SPEED_STEP)
+            elif key == QtCore.Qt.Key_Z and not event.isAutoRepeat():
+                self._adjust_teleop_speed(-self.TELEOP_SPEED_STEP)
+            elif key == QtCore.Qt.Key_Space:
+                self._pressed_keys.clear()
+                self._ros.publish_teleop_stop()
+            elif self._is_motion_key(key):
+                self._pressed_keys.add(key)
+                self._publish_current_teleop()
+            return True
+
+        if event_type == QtCore.QEvent.KeyRelease:
+            if event.isAutoRepeat():
+                return True
+            if self._is_motion_key(key):
+                self._pressed_keys.discard(key)
+                self._publish_current_teleop()
+            return True
+
+        return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):  # noqa: N802 (Qt API)
+        self._pressed_keys.clear()
+        self._ros.publish_teleop_stop()
+        super().closeEvent(event)
+
+    def _set_autonomous_mode(self, checked=False):
+        self._control_mode = 'autonomous'
+        self._pressed_keys.clear()
+        self._ros.set_control_mode('autonomous')
+        self._reset_teleop_speed()
+        self.auto_btn.setChecked(True)
+        self.manual_btn.setChecked(False)
+        self.mode_status_lbl.setText('자율탐사 모드')
+        self.setFocus()
+
+    def _set_manual_mode(self, checked=False):
+        self._control_mode = 'manual'
+        self._pressed_keys.clear()
+        self._ros.set_control_mode('manual')
+        self.auto_btn.setChecked(False)
+        self.manual_btn.setChecked(True)
+        self.mode_status_lbl.setText('수동조작 모드')
+        self.setFocus()
+
+    def _request_return_home(self, checked=False):
+        self._control_mode = 'autonomous'
+        self._pressed_keys.clear()
+        self._ros.set_control_mode('autonomous')
+        self._ros.request_return_home()
+        self._reset_teleop_speed()
+        self.auto_btn.setChecked(True)
+        self.manual_btn.setChecked(False)
+        self.mode_status_lbl.setText('원점 복귀 요청')
+        self.setFocus()
+
+    def _teleop_speed_text(self) -> str:
+        return (
+            f'WASD/방향키  Q/Z 속도 +/-  선속도 {self._teleop_linear_speed:.1f} m/s  '
+            f'각속도 {self._teleop_angular_speed:.1f} rad/s'
+        )
+
+    @staticmethod
+    def _is_motion_key(key: int) -> bool:
+        return key in (
+            QtCore.Qt.Key_W,
+            QtCore.Qt.Key_S,
+            QtCore.Qt.Key_A,
+            QtCore.Qt.Key_D,
+            QtCore.Qt.Key_Up,
+            QtCore.Qt.Key_Down,
+            QtCore.Qt.Key_Left,
+            QtCore.Qt.Key_Right,
+        )
+
+    def _is_teleop_key(self, key: int) -> bool:
+        return self._is_motion_key(key) or key in (
+            QtCore.Qt.Key_Q,
+            QtCore.Qt.Key_Z,
+            QtCore.Qt.Key_Space,
+        )
+
+    def _adjust_teleop_speed(self, delta: float):
+        self._teleop_linear_speed = min(
+            max(self._teleop_linear_speed + delta, self.TELEOP_MIN_SPEED),
+            self.TELEOP_MAX_SPEED,
+        )
+        self._teleop_angular_speed = min(
+            max(self._teleop_angular_speed + delta, self.TELEOP_MIN_SPEED),
+            self.TELEOP_MAX_SPEED,
+        )
+        self.teleop_speed_lbl.setText(self._teleop_speed_text())
+        self._publish_current_teleop()
+
+    def _reset_teleop_speed(self):
+        self._teleop_linear_speed = self.TELEOP_DEFAULT_LINEAR_SPEED
+        self._teleop_angular_speed = self.TELEOP_DEFAULT_ANGULAR_SPEED
+        self.teleop_speed_lbl.setText(self._teleop_speed_text())
+
+    def _publish_current_teleop(self):
+        if self._control_mode != 'manual':
+            return
+
+        linear = 0.0
+        angular = 0.0
+        if QtCore.Qt.Key_W in self._pressed_keys or QtCore.Qt.Key_Up in self._pressed_keys:
+            linear += self._teleop_linear_speed
+        if QtCore.Qt.Key_S in self._pressed_keys or QtCore.Qt.Key_Down in self._pressed_keys:
+            linear -= self._teleop_linear_speed
+        if QtCore.Qt.Key_A in self._pressed_keys or QtCore.Qt.Key_Left in self._pressed_keys:
+            angular += self._teleop_angular_speed
+        if QtCore.Qt.Key_D in self._pressed_keys or QtCore.Qt.Key_Right in self._pressed_keys:
+            angular -= self._teleop_angular_speed
+
+        self._ros.publish_teleop(linear, angular)
 
 
 def main(args=None):

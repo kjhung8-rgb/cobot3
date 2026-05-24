@@ -1,4 +1,4 @@
-"""Track which map cells the front camera has actually seen.
+"""Track which map cells the robot cameras have actually seen.
 
 Background: explore_lite drives the robot toward LiDAR-unknown cells. But
 the LiDAR has 360-deg / 25 m reach, so it maps rooms through doorways from
@@ -44,10 +44,12 @@ class CameraCoverageTracker(Node):
         super().__init__('camera_coverage_tracker')
 
         self.declare_parameter('camera_frame', 'spot_0/front_cam_link')
+        self.declare_parameter('camera_frames', ['spot_0/front_cam_link'])
         self.declare_parameter('fallback_frame', 'spot_0/base_link')
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('map_topic', '/map')
         self.declare_parameter('camera_info_topic', '/spot_0/front_cam/camera_info')
+        self.declare_parameter('camera_info_topics', ['/spot_0/front_cam/camera_info'])
         self.declare_parameter('horizontal_fov_deg', 70.0)
         self.declare_parameter('max_range_m', 6.0)
         self.declare_parameter('n_rays', 80)
@@ -61,10 +63,13 @@ class CameraCoverageTracker(Node):
         self.declare_parameter('zone_completion_threshold', 0.85)
         self.declare_parameter('zone_min_free_cells', 200)
 
-        self._cam_frame = self.get_parameter('camera_frame').value
+        self._cam_frames = self._string_list_parameter('camera_frames')
+        if not self._cam_frames:
+            self._cam_frames = [self.get_parameter('camera_frame').value]
         self._fallback_frame = self.get_parameter('fallback_frame').value
         self._map_frame = self.get_parameter('map_frame').value
         self._h_fov = math.radians(self.get_parameter('horizontal_fov_deg').value)
+        self._h_fovs = [self._h_fov for _ in self._cam_frames]
         self._max_range = float(self.get_parameter('max_range_m').value)
         self._n_rays = int(self.get_parameter('n_rays').value)
         rate_hz = float(self.get_parameter('update_rate_hz').value)
@@ -89,10 +94,19 @@ class CameraCoverageTracker(Node):
             OccupancyGrid, self.get_parameter('map_topic').value,
             self._on_map, latched_qos,
         )
-        self.create_subscription(
-            CameraInfo, self.get_parameter('camera_info_topic').value,
-            self._on_caminfo, 10,
-        )
+        camera_info_topics = self._string_list_parameter('camera_info_topics')
+        if len(camera_info_topics) != len(self._cam_frames):
+            camera_info_topics = [self.get_parameter('camera_info_topic').value]
+        self._camera_info_subs = []
+        for index, topic in enumerate(camera_info_topics):
+            self._camera_info_subs.append(
+                self.create_subscription(
+                    CameraInfo,
+                    topic,
+                    lambda msg, camera_index=index: self._on_caminfo(camera_index, msg),
+                    10,
+                )
+            )
 
         self._cov_pub = self.create_publisher(OccupancyGrid, '/camera_coverage', latched_qos)
         self._exp_pub = self.create_publisher(OccupancyGrid, '/map_explorable', latched_qos)
@@ -107,22 +121,32 @@ class CameraCoverageTracker(Node):
         self._tick_count = 0
         self.create_timer(1.0 / rate_hz, self._tick)
         self.get_logger().info(
-            f'camera_coverage_tracker ready (fov={math.degrees(self._h_fov):.0f}°, '
-            f'range={self._max_range}m, rays={self._n_rays}, rate={rate_hz}Hz)'
+            f'camera_coverage_tracker ready (cameras={self._cam_frames}, '
+            f'fov={math.degrees(self._h_fov):.0f}°, range={self._max_range}m, '
+            f'rays={self._n_rays}, rate={rate_hz}Hz)'
         )
 
     # ------------------------------------------------------------------ #
     # Subscriptions
 
-    def _on_caminfo(self, msg: CameraInfo):
+    def _string_list_parameter(self, name: str) -> list[str]:
+        value = self.get_parameter(name).value
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(',') if part.strip()]
+        return [str(part) for part in value]
+
+    def _on_caminfo(self, camera_index: int, msg: CameraInfo):
         # k[0] is fx; horizontal FOV = 2 * atan(width / (2*fx))
         if msg.width > 0 and len(msg.k) >= 1 and msg.k[0] > 0:
             new_fov = 2.0 * math.atan2(msg.width / 2.0, msg.k[0])
-            if abs(new_fov - self._h_fov) > 0.01:
+            if camera_index >= len(self._h_fovs):
+                return
+            if abs(new_fov - self._h_fovs[camera_index]) > 0.01:
                 self.get_logger().info(
-                    f'h_fov updated from camera_info: {math.degrees(new_fov):.1f}°'
+                    f'h_fov[{self._cam_frames[camera_index]}] updated from '
+                    f'camera_info: {math.degrees(new_fov):.1f}°'
                 )
-                self._h_fov = new_fov
+                self._h_fovs[camera_index] = new_fov
 
     def _on_map(self, msg: OccupancyGrid):
         new_data = np.array(msg.data, dtype=np.int8).reshape(
@@ -274,21 +298,6 @@ class CameraCoverageTracker(Node):
     def _tick(self):
         if self._map is None or self._map_data is None or self._coverage is None:
             return
-        try:
-            tf = self._tf_buffer.lookup_transform(
-                self._map_frame, self._cam_frame, rclpy.time.Time()
-            )
-        except Exception:
-            try:
-                tf = self._tf_buffer.lookup_transform(
-                    self._map_frame, self._fallback_frame, rclpy.time.Time()
-                )
-            except Exception:
-                return
-
-        x = tf.transform.translation.x
-        y = tf.transform.translation.y
-        yaw = yaw_from_quat(tf.transform.rotation)
 
         info = self._map.info
         res = info.resolution
@@ -297,29 +306,53 @@ class CameraCoverageTracker(Node):
         H, W = self._map_data.shape
 
         n_steps = max(2, int(self._max_range / res))
-        angle_start = yaw - self._h_fov / 2.0
-        angle_step = self._h_fov / max(1, self._n_rays - 1)
 
-        for i in range(self._n_rays):
-            angle = angle_start + i * angle_step
-            dx = math.cos(angle) * res
-            dy = math.sin(angle) * res
-            cx, cy = x, y
-            for _ in range(n_steps):
-                cx += dx
-                cy += dy
-                gx = int((cx - ox) / res)
-                gy = int((cy - oy) / res)
-                if gx < 0 or gx >= W or gy < 0 or gy >= H:
-                    break
-                v = self._map_data[gy, gx]
-                if v > 50:  # SLAM-known obstacle blocks the ray
-                    break
-                self._coverage[gy, gx] = 0
+        marked_any_camera = False
+        for camera_index, camera_frame in enumerate(self._cam_frames):
+            try:
+                tf = self._tf_buffer.lookup_transform(
+                    self._map_frame, camera_frame, rclpy.time.Time()
+                )
+            except Exception:
+                if len(self._cam_frames) != 1:
+                    continue
+                try:
+                    tf = self._tf_buffer.lookup_transform(
+                        self._map_frame, self._fallback_frame, rclpy.time.Time()
+                    )
+                except Exception:
+                    return
 
-        # Mark a disk around the robot's base_link as seen — the camera lives
-        # 0.5 m ahead of base_link with a downward tilt, so the rays never
-        # cover the robot's own footprint. Without this the robot stands on
+            x = tf.transform.translation.x
+            y = tf.transform.translation.y
+            yaw = yaw_from_quat(tf.transform.rotation)
+            h_fov = self._h_fovs[camera_index]
+            angle_start = yaw - h_fov / 2.0
+            angle_step = h_fov / max(1, self._n_rays - 1)
+
+            for i in range(self._n_rays):
+                angle = angle_start + i * angle_step
+                dx = math.cos(angle) * res
+                dy = math.sin(angle) * res
+                cx, cy = x, y
+                for _ in range(n_steps):
+                    cx += dx
+                    cy += dy
+                    gx = int((cx - ox) / res)
+                    gy = int((cy - oy) / res)
+                    if gx < 0 or gx >= W or gy < 0 or gy >= H:
+                        break
+                    v = self._map_data[gy, gx]
+                    if v > 50:  # SLAM-known obstacle blocks the ray
+                        break
+                    self._coverage[gy, gx] = 0
+                    marked_any_camera = True
+
+        if not marked_any_camera and len(self._cam_frames) > 1:
+            return
+
+        # Mark a disk around the robot's base_link as seen. Camera rays do not
+        # reliably cover the robot's own footprint. Without this the robot stands on
         # UNKNOWN cells in /map_explorable, which confuses Nav2 planning.
         try:
             base_tf = self._tf_buffer.lookup_transform(

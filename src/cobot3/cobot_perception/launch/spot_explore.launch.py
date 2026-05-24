@@ -10,7 +10,7 @@
 #   7. survivor_pose_to_marker (PoseStamped -> RViz X; 테스트: ros2 topic pub --once ...)
 #   8. RViz with combined view
 #
-# Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,front_cam/*}.
+# Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,*_cam/*}.
 
 import os
 import tempfile
@@ -131,6 +131,20 @@ def generate_launch_description():
                         output="screen",
                         parameters=[
                             {"use_sim_time": use_sim_time},
+                            {
+                                "camera_frames": [
+                                    "spot_0/front_cam_link",
+                                    "spot_0/left_cam_link",
+                                    "spot_0/right_cam_link",
+                                ],
+                            },
+                            {
+                                "camera_info_topics": [
+                                    "/spot_0/front_cam/camera_info",
+                                    "/spot_0/left_cam/camera_info",
+                                    "/spot_0/right_cam/camera_info",
+                                ],
+                            },
                             # 4 m: matches waypoint spacing in CPP, faster
                             # coverage growth, fewer waypoints to visit.
                             {"max_range_m": 4.0},
@@ -161,6 +175,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {"enable_person_dampening": True},
+                    {"slowdown_required_topic": "/spot_0/yolo/slowdown_required"},
                     {"dampening_factor": float(speed["yolo_speed_factor"])},
                     {"dampening_hold_sec": float(speed["yolo_hold_sec"])},
                 ],
@@ -208,6 +223,10 @@ def generate_launch_description():
                             {"spin_duration_sec": 4.0},
                             {"spin_speed_rad_s": float(speed["default_angular_radps"])},
                             {"skip_already_seen": True},
+                            {"use_start_pose_as_home": True},
+                            {"auto_return_enabled": True},
+                            {"auto_return_coverage_threshold": 0.95},
+                            {"auto_return_hold_sec": 5.0},
                             # Zone partitioning: 15m × 15m. With 4m
                             # waypoint spacing each zone has ~12 waypoints
                             # → meaningful "stay and finish current area

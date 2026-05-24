@@ -40,11 +40,17 @@ from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import Bool, ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
 
 WaypointKey = Tuple[int, int]   # rounded grid index, used as dict key
+
+
+def yaw_from_quat(q) -> float:
+    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny_cosp, cosy_cosp)
 
 
 class CoveragePathPlanner(Node):
@@ -58,11 +64,20 @@ class CoveragePathPlanner(Node):
         self.declare_parameter('robot_frame', 'spot_0/base_link')
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
+        self.declare_parameter('return_home_topic', '/coverage_planner/return_home')
 
         self.declare_parameter('waypoint_spacing_m', 2.0)
         self.declare_parameter('tick_period_sec', 1.5)
         self.declare_parameter('replan_period_sec', 8.0)
         self.declare_parameter('startup_delay_sec', 8.0)
+        self.declare_parameter('use_start_pose_as_home', True)
+        self.declare_parameter('home_x', 0.0)
+        self.declare_parameter('home_y', 0.0)
+        self.declare_parameter('home_yaw', 0.0)
+        self.declare_parameter('auto_return_enabled', True)
+        self.declare_parameter('auto_return_coverage_threshold', 0.95)
+        self.declare_parameter('auto_return_hold_sec', 5.0)
+        self.declare_parameter('auto_return_min_free_cells', 200)
 
         # ── Zone partitioning ──
         # Divide the map into ``zone_size_m`` × ``zone_size_m`` squares and
@@ -92,16 +107,51 @@ class CoveragePathPlanner(Node):
         self._zone_enabled = self._zone_size > 0.0
         self._current_zone: Optional[Tuple[int, int]] = None
         startup_delay = float(self.get_parameter('startup_delay_sec').value)
+        self._use_start_pose_as_home = bool(
+            self.get_parameter('use_start_pose_as_home').value
+        )
+        self._configured_home_pose = (
+            float(self.get_parameter('home_x').value),
+            float(self.get_parameter('home_y').value),
+            float(self.get_parameter('home_yaw').value),
+        )
+        self._auto_return_enabled = bool(
+            self.get_parameter('auto_return_enabled').value
+        )
+        self._auto_return_threshold = float(
+            self.get_parameter('auto_return_coverage_threshold').value
+        )
+        self._auto_return_hold_sec = float(
+            self.get_parameter('auto_return_hold_sec').value
+        )
+        self._auto_return_min_free = int(
+            self.get_parameter('auto_return_min_free_cells').value
+        )
 
         # ── State ──
         self._costmap: Optional[OccupancyGrid] = None
         self._coverage: Optional[OccupancyGrid] = None
+        self._map: Optional[OccupancyGrid] = None
+        self._home_pose: Optional[Tuple[float, float, float]] = (
+            None if self._use_start_pose_as_home else self._configured_home_pose
+        )
         # waypoint dict: (grid_x, grid_y) -> {world_xy, visited}
         self._waypoints: Dict[WaypointKey, Dict] = {}
         self._busy = False
         self._spinning = False
         self._spin_start_ns = 0
         self._current_wp_key: Optional[WaypointKey] = None
+        self._current_goal_kind: Optional[str] = None
+        self._paused = False
+        self._nav_goal_handle = None
+        self._canceling_for_pause = False
+        self._canceling_for_return = False
+        self._canceling_return_for_resume = False
+        self._return_requested = False
+        self._returning_home = False
+        self._finished = False
+        self._return_reason = ''
+        self._coverage_above_threshold_since_ns: Optional[int] = None
         self._launch_time = time.time()
         self._last_replan_ts = 0.0
 
@@ -117,11 +167,23 @@ class CoveragePathPlanner(Node):
             self._on_costmap, latched_qos,
         )
         self.create_subscription(
+            OccupancyGrid, self.get_parameter('map_topic').value,
+            self._on_map, latched_qos,
+        )
+        self.create_subscription(
             OccupancyGrid, self.get_parameter('coverage_topic').value,
             self._on_coverage, latched_qos,
         )
         self._cmd_pub = self.create_publisher(
             Twist, self.get_parameter('cmd_vel_topic').value, 10,
+        )
+        self.create_subscription(Bool, '/explore/resume', self._on_resume, 10)
+        self.create_subscription(Bool, '/coverage_planner/resume', self._on_resume, 10)
+        self.create_subscription(
+            Bool,
+            self.get_parameter('return_home_topic').value,
+            self._on_return_home,
+            10,
         )
         self._zones_pub = self.create_publisher(
             MarkerArray, '/coverage_zones', latched_qos,
@@ -147,8 +209,130 @@ class CoveragePathPlanner(Node):
     def _on_costmap(self, msg: OccupancyGrid):
         self._costmap = msg
 
+    def _on_map(self, msg: OccupancyGrid):
+        self._map = msg
+
     def _on_coverage(self, msg: OccupancyGrid):
         self._coverage = msg
+
+    def _on_resume(self, msg: Bool):
+        if msg.data:
+            self._resume()
+        else:
+            self._pause()
+
+    def _on_return_home(self, msg: Bool):
+        if msg.data:
+            self._request_return_home('manual request')
+
+    def _pause(self):
+        if self._paused:
+            return
+        was_spinning = self._spinning
+        self._paused = True
+        self._canceling_for_pause = True
+        self._spinning = False
+        self._publish_stop()
+
+        if self._nav_goal_handle is not None:
+            self.get_logger().info('coverage_path_planner paused; canceling active Nav2 goal')
+            try:
+                self._nav_goal_handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f'failed to cancel Nav2 goal while pausing: {exc}')
+                self._release_current_goal(mark_visited=False)
+        elif self._busy and not was_spinning:
+            self.get_logger().info(
+                'coverage_path_planner paused; waiting for pending Nav2 goal to cancel'
+            )
+        else:
+            self._release_current_goal(mark_visited=False)
+            self.get_logger().info('coverage_path_planner paused')
+
+    def _resume(self):
+        if (self._return_requested
+                or self._returning_home
+                or self._canceling_for_return
+                or self._finished):
+            self._resume_from_return_home()
+            return
+        if not self._paused:
+            return
+        self._paused = False
+        self._reanchor_zone_to_robot()
+        self._last_replan_ts = 0.0
+        if not self._busy and self._nav_goal_handle is None:
+            self._canceling_for_pause = False
+        self._publish_stop()
+        self.get_logger().info('coverage_path_planner resumed')
+
+    def _resume_from_return_home(self):
+        self._finished = False
+        self._paused = False
+        self._return_requested = False
+        self._coverage_above_threshold_since_ns = None
+        self._publish_stop()
+
+        if self._nav_goal_handle is not None:
+            self._canceling_return_for_resume = True
+            try:
+                self._nav_goal_handle.cancel_goal_async()
+                self.get_logger().info('return-home cancel requested; resuming exploration')
+            except Exception as exc:
+                self.get_logger().warn(
+                    f'failed to cancel return-home goal while resuming: {exc}'
+                )
+                self._complete_return_home_resume()
+            return
+
+        if self._busy:
+            self._canceling_return_for_resume = True
+            self.get_logger().info(
+                'return-home pending goal response; will resume after cancel'
+            )
+            return
+
+        self._complete_return_home_resume()
+
+    def _complete_return_home_resume(self):
+        self._return_requested = False
+        self._returning_home = False
+        self._canceling_for_return = False
+        self._canceling_return_for_resume = False
+        self._finished = False
+        self._release_current_goal(mark_visited=False)
+        self._reanchor_zone_to_robot()
+        self._last_replan_ts = 0.0
+        self._publish_stop()
+        self.get_logger().info('return-home canceled; exploration resumed')
+
+    def _publish_stop(self):
+        stop = Twist()
+        for _ in range(3):
+            self._cmd_pub.publish(stop)
+
+    def _capture_home_pose(self) -> bool:
+        if self._home_pose is not None:
+            return True
+        if not self._use_start_pose_as_home:
+            self._home_pose = self._configured_home_pose
+            return True
+        try:
+            t = self._tf_buffer.lookup_transform(
+                self._map_frame, self._robot_frame, rclpy.time.Time(),
+            )
+        except Exception:
+            return False
+        self._home_pose = (
+            t.transform.translation.x,
+            t.transform.translation.y,
+            yaw_from_quat(t.transform.rotation),
+        )
+        hx, hy, hyaw = self._home_pose
+        self.get_logger().info(
+            f'home pose captured at start: x={hx:.2f}, y={hy:.2f}, yaw={hyaw:.2f}'
+        )
+        return True
 
     def _get_robot_pose(self) -> Optional[Tuple[float, float]]:
         try:
@@ -158,6 +342,108 @@ class CoveragePathPlanner(Node):
             return t.transform.translation.x, t.transform.translation.y
         except Exception:
             return None
+
+    def _zone_for_pose(self, x: float, y: float) -> Optional[Tuple[int, int]]:
+        if not self._zone_enabled:
+            return None
+        return (int(math.floor(x / self._zone_size)),
+                int(math.floor(y / self._zone_size)))
+
+    def _reanchor_zone_to_robot(self):
+        if not self._zone_enabled:
+            return
+        pose = self._get_robot_pose()
+        if pose is None:
+            return
+        robot_zone = self._zone_for_pose(*pose)
+        if robot_zone != self._current_zone:
+            self.get_logger().info(
+                f'resuming from robot zone {robot_zone} (was {self._current_zone})'
+            )
+        self._current_zone = robot_zone
+
+    def _request_return_home(self, reason: str):
+        if self._finished:
+            self.get_logger().info('return-home request ignored; exploration already finished')
+            return
+        if self._returning_home:
+            return
+
+        was_spinning = self._spinning
+        self._return_reason = reason
+        self._return_requested = True
+        self._paused = False
+        self._spinning = False
+        self._publish_stop()
+        self.get_logger().info(f'return-home requested ({reason})')
+
+        if self._nav_goal_handle is not None:
+            self._canceling_for_return = True
+            try:
+                self._nav_goal_handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f'failed to cancel active Nav2 goal for return-home: {exc}')
+                self._release_current_goal(mark_visited=False)
+        elif was_spinning:
+            self._release_current_goal(mark_visited=False)
+            self._send_home_goal()
+        elif self._busy:
+            self._canceling_for_return = True
+        elif not self._busy:
+            self._send_home_goal()
+
+    def _maybe_auto_return_home(self):
+        if (not self._auto_return_enabled
+                or self._finished
+                or self._return_requested
+                or self._returning_home):
+            return
+        if self._map is None or self._coverage is None:
+            self._coverage_above_threshold_since_ns = None
+            return
+
+        mi = self._map.info
+        ci = self._coverage.info
+        same_geometry = (
+            mi.width == ci.width
+            and mi.height == ci.height
+            and abs(mi.resolution - ci.resolution) < 1e-6
+            and abs(mi.origin.position.x - ci.origin.position.x) < 1e-6
+            and abs(mi.origin.position.y - ci.origin.position.y) < 1e-6
+        )
+        if not same_geometry:
+            self._coverage_above_threshold_since_ns = None
+            return
+
+        map_arr = np.asarray(self._map.data, dtype=np.int8)
+        cov_arr = np.asarray(self._coverage.data, dtype=np.int8)
+        if map_arr.size != cov_arr.size:
+            self._coverage_above_threshold_since_ns = None
+            return
+
+        free_cells = int(np.count_nonzero(map_arr == 0))
+        if free_cells < self._auto_return_min_free:
+            self._coverage_above_threshold_since_ns = None
+            return
+
+        seen_free = int(np.count_nonzero((map_arr == 0) & (cov_arr == 0)))
+        ratio = seen_free / free_cells if free_cells else 0.0
+        if ratio < self._auto_return_threshold:
+            self._coverage_above_threshold_since_ns = None
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+        if self._coverage_above_threshold_since_ns is None:
+            self._coverage_above_threshold_since_ns = now_ns
+            self.get_logger().info(
+                f'coverage {ratio:.1%} reached; waiting '
+                f'{self._auto_return_hold_sec:.1f}s before return-home'
+            )
+            return
+
+        held_sec = (now_ns - self._coverage_above_threshold_since_ns) / 1e9
+        if held_sec >= self._auto_return_hold_sec:
+            self._request_return_home(f'coverage {ratio:.1%}')
 
     # ------------------------------------------------------------------ #
 
@@ -268,8 +554,7 @@ class CoveragePathPlanner(Node):
 
         # Pick / advance current zone
         if self._current_zone is None:
-            self._current_zone = (int(math.floor(rx / self._zone_size)),
-                                  int(math.floor(ry / self._zone_size)))
+            self._current_zone = self._zone_for_pose(rx, ry)
             self.get_logger().info(f'starting zone {self._current_zone}')
 
         # Try to pick nearest unvisited within current zone
@@ -315,6 +600,16 @@ class CoveragePathPlanner(Node):
     # ------------------------------------------------------------------ #
 
     def _main_tick(self):
+        if self._paused:
+            return
+        self._capture_home_pose()
+        self._maybe_auto_return_home()
+        if self._return_requested:
+            if not self._busy and not self._spinning:
+                self._send_home_goal()
+            return
+        if self._returning_home or self._finished:
+            return
         # Startup delay so Nav2 has time to come up
         if time.time() - self._launch_time < float(self.get_parameter('startup_delay_sec').value):
             return
@@ -377,38 +672,134 @@ class CoveragePathPlanner(Node):
 
         self._busy = True
         self._current_wp_key = key
+        self._current_goal_kind = 'waypoint'
         future = self._nav_client.send_goal_async(goal_msg)
         future.add_done_callback(self._on_goal_response)
         # Refresh viz so current zone/waypoint highlight is up-to-date
         self._publish_zone_viz()
         self._publish_waypoint_viz()
 
+    def _send_home_goal(self):
+        if self._returning_home or self._finished:
+            return
+        if not self._nav_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn('Nav2 server unavailable for return-home')
+            return
+        if not self._capture_home_pose():
+            self._home_pose = self._configured_home_pose
+            self.get_logger().warn(
+                'could not capture start pose; returning to configured home '
+                f'({self._home_pose[0]:+.2f}, {self._home_pose[1]:+.2f})'
+            )
+
+        hx, hy, hyaw = self._home_pose
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = self._map_frame
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = hx
+        goal_msg.pose.pose.position.y = hy
+        goal_msg.pose.pose.orientation.z = math.sin(hyaw / 2.0)
+        goal_msg.pose.pose.orientation.w = math.cos(hyaw / 2.0)
+
+        self._busy = True
+        self._returning_home = True
+        self._return_requested = False
+        self._current_wp_key = None
+        self._current_goal_kind = 'home'
+        self.get_logger().info(
+            f'returning home: x={hx:.2f}, y={hy:.2f}, yaw={hyaw:.2f}'
+        )
+        future = self._nav_client.send_goal_async(goal_msg)
+        future.add_done_callback(self._on_goal_response)
+
     def _on_goal_response(self, future):
         try:
             handle = future.result()
         except Exception as exc:
             self.get_logger().error(f'send_goal failed: {exc}')
-            self._mark_visited_and_release()
+            if self._current_goal_kind == 'home':
+                self._finish_return_home(success=False, detail='send failed')
+            else:
+                self._release_current_goal(mark_visited=not self._paused)
             return
+        self._nav_goal_handle = handle
         if not handle.accepted:
             self.get_logger().warn('Goal rejected')
-            self._mark_visited_and_release()
+            self._nav_goal_handle = None
+            if self._canceling_return_for_resume:
+                self._complete_return_home_resume()
+                return
+            if self._current_goal_kind == 'home':
+                self._finish_return_home(success=False, detail='goal rejected')
+            else:
+                self._release_current_goal(mark_visited=not self._paused)
             return
         handle.get_result_async().add_done_callback(self._on_goal_result)
+        if self._canceling_return_for_resume:
+            try:
+                handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(
+                    f'failed to cancel goal while resuming exploration: {exc}'
+                )
+                self._complete_return_home_resume()
+        elif self._canceling_for_return and self._current_goal_kind != 'home':
+            try:
+                handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f'failed to cancel Nav2 goal for return-home: {exc}')
+                self._release_current_goal(mark_visited=False)
+        elif self._paused or self._canceling_for_pause:
+            self._canceling_for_pause = True
+            try:
+                handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().warn(f'failed to cancel Nav2 goal after pause: {exc}')
+                self._release_current_goal(mark_visited=False)
 
     def _on_goal_result(self, future):
+        goal_kind = self._current_goal_kind
         try:
             res = future.result()
             status = res.status
         except Exception as exc:
             self.get_logger().error(f'goal result failed: {exc}')
-            self._mark_visited_and_release()
+            self._nav_goal_handle = None
+            if goal_kind == 'home':
+                self._finish_return_home(success=False, detail='result failed')
+            else:
+                self._release_current_goal(mark_visited=not self._paused)
             return
 
         name = {GoalStatus.STATUS_SUCCEEDED: 'SUCCEEDED',
                 GoalStatus.STATUS_ABORTED: 'ABORTED',
                 GoalStatus.STATUS_CANCELED: 'CANCELED'}.get(status, str(status))
         self.get_logger().info(f'   result: {name}')
+        self._nav_goal_handle = None
+
+        if self._canceling_return_for_resume:
+            self._complete_return_home_resume()
+            return
+
+        if goal_kind == 'home':
+            self._finish_return_home(
+                success=status == GoalStatus.STATUS_SUCCEEDED,
+                detail=name,
+            )
+            return
+
+        if self._canceling_for_return:
+            self._canceling_for_return = False
+            self._release_current_goal(mark_visited=False)
+            self._publish_stop()
+            self._send_home_goal()
+            return
+
+        if self._paused or self._canceling_for_pause:
+            self._canceling_for_pause = False
+            self._release_current_goal(mark_visited=False)
+            self._publish_stop()
+            return
 
         # Either way, mark visited so we don't pick it forever. SUCCESS:
         # great. ABORTED: unreachable, skip. CANCELED: shouldn't happen
@@ -419,20 +810,42 @@ class CoveragePathPlanner(Node):
             self._spinning = True
             self._spin_start_ns = self.get_clock().now().nanoseconds
         else:
-            self._mark_visited_and_release()
+            self._release_current_goal(mark_visited=True)
+
+    def _finish_return_home(self, success: bool, detail: str):
+        self._return_requested = False
+        self._returning_home = False
+        self._canceling_for_return = False
+        self._finished = True
+        self._release_current_goal(mark_visited=False)
+        self._publish_stop()
+        if success:
+            self.get_logger().info('return-home complete; exploration finished')
+        else:
+            self.get_logger().warn(f'return-home ended with {detail}; exploration stopped')
 
     def _mark_visited(self):
         if self._current_wp_key is not None and self._current_wp_key in self._waypoints:
             self._waypoints[self._current_wp_key]['visited'] = True
 
-    def _mark_visited_and_release(self):
-        self._mark_visited()
+    def _release_current_goal(self, mark_visited: bool):
+        if mark_visited:
+            self._mark_visited()
         self._current_wp_key = None
+        self._nav_goal_handle = None
+        self._spinning = False
         self._busy = False
+        self._current_goal_kind = None
 
     # ------------------------------------------------------------------ #
 
     def _spin_tick(self):
+        if self._paused:
+            if self._spinning:
+                self._spinning = False
+                self._release_current_goal(mark_visited=False)
+                self._publish_stop()
+            return
         if not self._spinning:
             return
         elapsed = (self.get_clock().now().nanoseconds - self._spin_start_ns) / 1e9
@@ -441,19 +854,28 @@ class CoveragePathPlanner(Node):
             t.angular.z = self._spin_speed
             self._cmd_pub.publish(t)
             return
-        stop = Twist()
-        for _ in range(3):
-            self._cmd_pub.publish(stop)
-        self._spinning = False
-        self._current_wp_key = None
-        self._busy = False
+        self._publish_stop()
+        self._release_current_goal(mark_visited=False)
 
     # ------------------------------------------------------------------ #
     # Visualization
 
+    def _publish_delete_all_markers(self, publisher, namespace: str):
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header.frame_id = self._map_frame
+        clear.header.stamp = self.get_clock().now().to_msg()
+        clear.ns = namespace
+        clear.id = -1
+        clear.pose.orientation.w = 1.0
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+        publisher.publish(ma)
+
     def _publish_zone_viz(self):
         """One LINE_LIST + TEXT marker per zone — colored by state."""
         if not self._zone_enabled or not self._waypoints:
+            self._publish_delete_all_markers(self._zones_pub, 'coverage_zones')
             return
 
         # Aggregate per-zone: (visited_count, total_count)
@@ -465,15 +887,8 @@ class CoveragePathPlanner(Node):
             v, t = per_zone.get(z, (0, 0))
             per_zone[z] = (v + (1 if wp['visited'] else 0), t + 1)
 
+        self._publish_delete_all_markers(self._zones_pub, 'coverage_zones')
         ma = MarkerArray()
-        # Clear previous markers
-        clear = Marker()
-        clear.header.frame_id = self._map_frame
-        clear.header.stamp = self.get_clock().now().to_msg()
-        clear.ns = 'coverage_zones'
-        clear.pose.orientation.w = 1.0
-        clear.action = Marker.DELETEALL
-        ma.markers.append(clear)
 
         mid = 0
         for zone, (v, total) in per_zone.items():
@@ -532,16 +947,11 @@ class CoveragePathPlanner(Node):
     def _publish_waypoint_viz(self):
         """Sphere per waypoint — colored by visited / current."""
         if not self._waypoints:
+            self._publish_delete_all_markers(self._wps_pub, 'coverage_waypoints')
             return
 
+        self._publish_delete_all_markers(self._wps_pub, 'coverage_waypoints')
         ma = MarkerArray()
-        clear = Marker()
-        clear.header.frame_id = self._map_frame
-        clear.header.stamp = self.get_clock().now().to_msg()
-        clear.ns = 'coverage_waypoints'
-        clear.pose.orientation.w = 1.0
-        clear.action = Marker.DELETEALL
-        ma.markers.append(clear)
 
         for mid, (key, wp) in enumerate(self._waypoints.items()):
             m = Marker()
