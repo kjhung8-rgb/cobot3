@@ -31,8 +31,8 @@ yolo_detector:
     confidence_threshold: 0.4
     device: cuda
     imgsz: 640
-    inference_period_sec: 0.1
-    annotated_publish_period_sec: 0.1
+    inference_period_sec: 0.2
+    annotated_publish_period_sec: 0.3
     person_only: true
     use_latest_tf: true
     tf_timeout_sec: 0.2

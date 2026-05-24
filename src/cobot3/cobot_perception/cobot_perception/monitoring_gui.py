@@ -87,6 +87,10 @@ from visualization_msgs.msg import MarkerArray
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 
+DEFAULT_VIDEO_MAX_WIDTH = 640
+DEFAULT_VIDEO_MAX_HEIGHT = 360
+
+
 def _prefer_pyqt_platform_plugins():
     """Undo cv2's Qt plugin path override before QApplication starts."""
     plugin_path = os.environ.get('QT_QPA_PLATFORM_PLUGIN_PATH', '')
@@ -122,6 +126,7 @@ class MonitorRosNode(Node):
         self._lock = threading.Lock()
         self._bridge = CvBridge()
         self._t0 = launch_t0
+        self._video_max_size = self._read_video_max_size()
 
         # State
         self._images: dict[str, Optional[np.ndarray]] = {
@@ -201,8 +206,34 @@ class MonitorRosNode(Node):
             arr = self._bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         except Exception:
             return
+        arr = self._downsample_image(arr)
         with self._lock:
             self._images[camera_name] = arr
+
+    @staticmethod
+    def _read_video_max_size() -> tuple[int, int]:
+        width = DEFAULT_VIDEO_MAX_WIDTH
+        height = DEFAULT_VIDEO_MAX_HEIGHT
+        try:
+            width = int(os.environ.get('COBOT_GUI_VIDEO_MAX_WIDTH', width))
+            height = int(os.environ.get('COBOT_GUI_VIDEO_MAX_HEIGHT', height))
+        except ValueError:
+            width = DEFAULT_VIDEO_MAX_WIDTH
+            height = DEFAULT_VIDEO_MAX_HEIGHT
+        return max(1, width), max(1, height)
+
+    def _downsample_image(self, arr: np.ndarray) -> np.ndarray:
+        max_w, max_h = self._video_max_size
+        h, w = arr.shape[:2]
+        scale = min(max_w / max(w, 1), max_h / max(h, 1), 1.0)
+        if scale >= 1.0:
+            return arr
+
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        y_idx = np.linspace(0, h - 1, new_h).astype(np.intp)
+        x_idx = np.linspace(0, w - 1, new_w).astype(np.intp)
+        return np.ascontiguousarray(arr[y_idx][:, x_idx])
 
     def _on_map(self, msg: OccupancyGrid):
         with self._lock:
@@ -393,6 +424,7 @@ class MapPanel(QtWidgets.QWidget):
             'robot': True,
             'survivors': True,
         }
+        self._image_cache: dict[str, tuple[tuple, QtGui.QImage]] = {}
 
     def set_layer_visible(self, layer: str, visible: bool):
         if layer not in self._layers:
@@ -449,13 +481,21 @@ class MapPanel(QtWidgets.QWidget):
         self._draw_grid(p, ref_grid)
 
         if self._layers['map'] and self._map is not None:
-            self._draw_grid_image(p, self._map, self._map_image(self._map))
+            self._draw_grid_image(
+                p, self._map, self._cached_grid_image('map', self._map, self._map_image)
+            )
 
         if self._layers['coverage'] and self._cov is not None:
-            self._draw_grid_image(p, self._cov, self._coverage_image(self._cov))
+            self._draw_grid_image(
+                p, self._cov,
+                self._cached_grid_image('coverage', self._cov, self._coverage_image),
+            )
 
         if self._layers['costmap'] and self._costmap is not None:
-            self._draw_grid_image(p, self._costmap, self._costmap_image(self._costmap))
+            self._draw_grid_image(
+                p, self._costmap,
+                self._cached_grid_image('costmap', self._costmap, self._costmap_image),
+            )
 
         if self._layers['zones'] and self._zones is not None:
             self._draw_zones(p, self._zones)
@@ -551,6 +591,30 @@ class MapPanel(QtWidgets.QWidget):
         if image.isNull():
             return
         painter.drawImage(self._grid_rect(grid), image)
+
+    def _cached_grid_image(self, name: str, grid: OccupancyGrid, factory):
+        key = self._grid_cache_key(grid)
+        cached = self._image_cache.get(name)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        image = factory(grid)
+        self._image_cache[name] = (key, image)
+        return image
+
+    @staticmethod
+    def _grid_cache_key(grid: OccupancyGrid) -> tuple:
+        info = grid.info
+        stamp = grid.header.stamp
+        return (
+            stamp.sec,
+            stamp.nanosec,
+            info.width,
+            info.height,
+            info.resolution,
+            info.origin.position.x,
+            info.origin.position.y,
+            len(grid.data),
+        )
 
     @staticmethod
     def _map_image(grid: OccupancyGrid) -> QtGui.QImage:
