@@ -29,7 +29,12 @@ Layout
 
 from __future__ import annotations
 
+import ctypes
+import math
 import os
+import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -42,11 +47,11 @@ import rclpy
 import tf2_ros
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped, Twist
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Path as NavPath
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import Bool, Int32, String
 from visualization_msgs.msg import MarkerArray
 
@@ -55,10 +60,14 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 DEFAULT_VIDEO_MAX_WIDTH = 640
 DEFAULT_VIDEO_MAX_HEIGHT = 360
+ANNOTATED_IMAGE_STALE_SEC = 1.0
 
 
 def _prefer_pyqt_platform_plugins():
     """Undo cv2's Qt plugin path override before QApplication starts."""
+    if os.environ.get('DISPLAY') and not os.environ.get('QT_QPA_PLATFORM'):
+        os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
     plugin_path = os.environ.get('QT_QPA_PLATFORM_PLUGIN_PATH', '')
     if 'site-packages/cv2/qt/plugins' in plugin_path:
         os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = QtCore.QLibraryInfo.location(
@@ -100,9 +109,16 @@ class MonitorRosNode(Node):
             'center': None,
             'right': None,
         }
+        self._last_annotated_image_time: dict[str, float] = {
+            'left': 0.0,
+            'center': 0.0,
+            'right': 0.0,
+        }
         self._map: Optional[OccupancyGrid] = None
         self._costmap: Optional[OccupancyGrid] = None
         self._coverage: Optional[OccupancyGrid] = None
+        self._scan_points: list[tuple[float, float]] = []
+        self._plan_points: list[tuple[float, float]] = []
         self._robot_xy: Optional[tuple] = None
         self._zones: Optional[MarkerArray] = None
         self._waypoints: Optional[MarkerArray] = None
@@ -122,18 +138,36 @@ class MonitorRosNode(Node):
             depth=1,
         )
 
-        image_topics = {
+        annotated_image_topics = {
             'left': '/spot_0/yolo/left_annotated_image',
             'center': '/spot_0/yolo/annotated_image',
             'right': '/spot_0/yolo/right_annotated_image',
         }
+        raw_image_topics = {
+            'left': '/spot_0/left_cam/color_image',
+            'center': '/spot_0/front_cam/color_image',
+            'right': '/spot_0/right_cam/color_image',
+        }
         self._image_subs = []
-        for camera_name, topic in image_topics.items():
+        for camera_name, topic in annotated_image_topics.items():
             self._image_subs.append(
                 self.create_subscription(
                     Image,
                     topic,
-                    lambda msg, name=camera_name: self._on_image(name, msg),
+                    lambda msg, name=camera_name: self._on_image(
+                        name, msg, annotated=True
+                    ),
+                    sensor,
+                )
+            )
+        for camera_name, topic in raw_image_topics.items():
+            self._image_subs.append(
+                self.create_subscription(
+                    Image,
+                    topic,
+                    lambda msg, name=camera_name: self._on_image(
+                        name, msg, annotated=False
+                    ),
                     sensor,
                 )
             )
@@ -142,6 +176,8 @@ class MonitorRosNode(Node):
                                  self._on_costmap, latched)
         self.create_subscription(OccupancyGrid, '/camera_coverage',
                                  self._on_coverage, latched)
+        self.create_subscription(LaserScan, '/spot_0/scan', self._on_scan, sensor)
+        self.create_subscription(NavPath, '/plan', self._on_plan, 10)
         self.create_subscription(MarkerArray, '/coverage_zones',
                                  self._on_zones, latched)
         self.create_subscription(MarkerArray, '/coverage_waypoints',
@@ -170,13 +206,21 @@ class MonitorRosNode(Node):
 
     # ── callbacks ──
 
-    def _on_image(self, camera_name: str, msg: Image):
+    def _on_image(self, camera_name: str, msg: Image, annotated: bool):
         try:
             arr = self._bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
         except Exception:
             return
         arr = self._downsample_image(arr)
+        now = time.monotonic()
         with self._lock:
+            if annotated:
+                self._last_annotated_image_time[camera_name] = now
+            elif (
+                now - self._last_annotated_image_time.get(camera_name, 0.0)
+                < ANNOTATED_IMAGE_STALE_SEC
+            ):
+                return
             self._images[camera_name] = arr
 
     @staticmethod
@@ -216,6 +260,17 @@ class MonitorRosNode(Node):
         with self._lock:
             self._coverage = msg
 
+    def _on_scan(self, msg: LaserScan):
+        points = self._scan_to_map_points(msg)
+        with self._lock:
+            self._scan_points = points
+
+    def _on_plan(self, msg: NavPath):
+        points = [(pose.pose.position.x, pose.pose.position.y)
+                  for pose in msg.poses]
+        with self._lock:
+            self._plan_points = points
+
     def _on_zones(self, msg: MarkerArray):
         with self._lock:
             self._zones = msg
@@ -253,6 +308,42 @@ class MonitorRosNode(Node):
         except Exception:
             pass
 
+    def _scan_to_map_points(self, msg: LaserScan) -> list[tuple[float, float]]:
+        frame_id = msg.header.frame_id or 'spot_0/lidar_link'
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'map', frame_id, rclpy.time.Time()
+            )
+        except Exception:
+            return []
+
+        t = tf.transform.translation
+        q = tf.transform.rotation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+
+        points: list[tuple[float, float]] = []
+        angle = msg.angle_min
+        # Cap work per scan; display density stays high enough for the GUI.
+        step = max(1, len(msg.ranges) // 1800)
+        for i, rng in enumerate(msg.ranges):
+            if i % step:
+                angle += msg.angle_increment
+                continue
+            if math.isfinite(rng) and msg.range_min <= rng <= msg.range_max:
+                lx = rng * math.cos(angle)
+                ly = rng * math.sin(angle)
+                points.append((
+                    t.x + cos_yaw * lx - sin_yaw * ly,
+                    t.y + sin_yaw * lx + cos_yaw * ly,
+                ))
+            angle += msg.angle_increment
+        return points
+
     # ── thread-safe snapshot ──
 
     def snapshot(self):
@@ -265,6 +356,8 @@ class MonitorRosNode(Node):
                 'map': self._map,
                 'costmap': self._costmap,
                 'coverage': self._coverage,
+                'scan_points': list(self._scan_points),
+                'plan_points': list(self._plan_points),
                 'robot_xy': self._robot_xy,
                 'zones': self._zones,
                 'waypoints': self._waypoints,
@@ -370,6 +463,304 @@ class ImagePanel(QtWidgets.QLabel):
         self.setPixmap(pix)
 
 
+class EmbeddedRvizPanel(QtWidgets.QWidget):
+    """Host an RViz2 render window inside the dashboard."""
+
+    embed_failed = QtCore.pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.setAttribute(QtCore.Qt.WA_NativeWindow, True)
+        self.setMinimumSize(480, 360)
+        self.setStyleSheet('background-color: #303030;')
+        self._process: Optional[subprocess.Popen] = None
+        self._rviz_window_id: Optional[int] = None
+        self._x11_display = None
+        self._x11 = None
+        self._start_attempted = False
+        self._poll_count = 0
+
+        self._layout = QtWidgets.QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+
+        self._status_lbl = QtWidgets.QLabel('Starting embedded RViz...')
+        self._status_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        self._status_lbl.setStyleSheet('color: #cbd5e1; background-color: #303030;')
+        self._layout.addWidget(self._status_lbl, 1)
+
+        self._poll_timer = QtCore.QTimer(self)
+        self._poll_timer.timeout.connect(self._try_embed_window)
+
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        if not self._start_attempted:
+            self._start_attempted = True
+            QtCore.QTimer.singleShot(0, self._start_rviz)
+
+    def _start_rviz(self):
+        rviz_bin = shutil.which('rviz2')
+        if rviz_bin is None:
+            self._fail('rviz2 executable not found')
+            return
+
+        rviz_cfg = self._rviz_config_path()
+        if rviz_cfg is None:
+            self._fail('spot_explore.rviz config not found')
+            return
+
+        env = os.environ.copy()
+        if not env.get('QT_QPA_PLATFORM'):
+            env['QT_QPA_PLATFORM'] = 'xcb'
+
+        cmd = [
+            rviz_bin,
+            '-d',
+            str(rviz_cfg),
+            '--ros-args',
+            '-r',
+            '__node:=monitoring_gui_embedded_rviz',
+        ]
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            self._fail(f'failed to start rviz2: {exc}')
+            return
+
+        self._poll_count = 0
+        self._poll_timer.start(250)
+
+    @staticmethod
+    def _rviz_config_path() -> Optional[Path]:
+        env_path = os.environ.get('COBOT_GUI_RVIZ_CONFIG')
+        if env_path:
+            path = Path(env_path).expanduser()
+            if path.is_file():
+                return path
+
+        try:
+            from ament_index_python.packages import get_package_share_directory
+
+            share_dir = Path(get_package_share_directory('cobot_perception'))
+            path = share_dir / 'rviz' / 'spot_explore.rviz'
+            if path.is_file():
+                return path
+        except Exception:
+            pass
+
+        source_path = Path(__file__).resolve().parents[1] / 'rviz' / 'spot_explore.rviz'
+        if source_path.is_file():
+            return source_path
+        return None
+
+    def _try_embed_window(self):
+        if self._process is None:
+            self._fail('rviz process missing')
+            return
+        if self._process.poll() is not None:
+            self._fail('rviz2 exited before its window was embedded')
+            return
+
+        window_id = self._find_window_id(self._process.pid)
+        if window_id is None:
+            self._poll_count += 1
+            if self._poll_count > 60:
+                self._fail('could not find rviz2 X11 window')
+            return
+
+        self._poll_timer.stop()
+        try:
+            self._reparent_x11_window(window_id)
+        except RuntimeError as exc:
+            self._fail(str(exc))
+            return
+
+        self._layout.removeWidget(self._status_lbl)
+        self._status_lbl.hide()
+        self._status_lbl.deleteLater()
+        self._rviz_window_id = window_id
+        self._resize_embedded_window()
+
+    def _find_window_id(self, pid: int) -> Optional[int]:
+        window_id = self._find_window_id_with_wmctrl(pid)
+        if window_id is not None:
+            return window_id
+        window_id = self._find_window_id_with_xdotool(pid)
+        if window_id is not None:
+            return window_id
+        return self._find_window_id_with_xprop(pid)
+
+    @staticmethod
+    def _find_window_id_with_wmctrl(pid: int) -> Optional[int]:
+        if shutil.which('wmctrl') is None:
+            return None
+        try:
+            out = subprocess.check_output(
+                ['wmctrl', '-lp'],
+                text=True,
+                timeout=1.0,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        for line in out.splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 3:
+                continue
+            try:
+                if int(parts[2]) == pid:
+                    return int(parts[0], 16)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _find_window_id_with_xdotool(pid: int) -> Optional[int]:
+        if shutil.which('xdotool') is None:
+            return None
+        try:
+            out = subprocess.check_output(
+                ['xdotool', 'search', '--pid', str(pid)],
+                text=True,
+                timeout=1.0,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        for line in reversed(out.splitlines()):
+            try:
+                return int(line.strip(), 0)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _find_window_id_with_xprop(pid: int) -> Optional[int]:
+        if shutil.which('xwininfo') is None or shutil.which('xprop') is None:
+            return None
+        try:
+            out = subprocess.check_output(
+                ['xwininfo', '-root', '-children'],
+                text=True,
+                timeout=1.0,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        for match in re.finditer(r'\b(0x[0-9a-fA-F]+)\b', out):
+            window_hex = match.group(1)
+            try:
+                prop = subprocess.check_output(
+                    ['xprop', '-id', window_hex, '_NET_WM_PID'],
+                    text=True,
+                    timeout=0.2,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if f'= {pid}' in prop:
+                return int(window_hex, 16)
+        return None
+
+    def _reparent_x11_window(self, window_id: int):
+        if self._x11 is None:
+            try:
+                self._x11 = ctypes.cdll.LoadLibrary('libX11.so.6')
+            except OSError as exc:
+                raise RuntimeError(f'failed to load libX11: {exc}') from exc
+
+            self._x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            self._x11.XOpenDisplay.restype = ctypes.c_void_p
+            self._x11.XReparentWindow.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_ulong,
+                ctypes.c_ulong,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            self._x11.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            self._x11.XMoveResizeWindow.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_ulong,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+                ctypes.c_uint,
+            ]
+            self._x11.XFlush.argtypes = [ctypes.c_void_p]
+            self._x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
+        if self._x11_display is None:
+            self._x11_display = self._x11.XOpenDisplay(None)
+        if not self._x11_display:
+            raise RuntimeError('failed to open X11 display')
+
+        parent_id = int(self.winId())
+        result = self._x11.XReparentWindow(
+            self._x11_display,
+            ctypes.c_ulong(window_id),
+            ctypes.c_ulong(parent_id),
+            0,
+            0,
+        )
+        if result == 0:
+            raise RuntimeError('XReparentWindow failed')
+        self._x11.XMapRaised(self._x11_display, ctypes.c_ulong(window_id))
+        self._x11.XFlush(self._x11_display)
+
+    def _resize_embedded_window(self):
+        if self._x11 is None or self._x11_display is None or self._rviz_window_id is None:
+            return
+        width = max(1, self.width())
+        height = max(1, self.height())
+        self._x11.XMoveResizeWindow(
+            self._x11_display,
+            ctypes.c_ulong(self._rviz_window_id),
+            0,
+            0,
+            ctypes.c_uint(width),
+            ctypes.c_uint(height),
+        )
+        self._x11.XFlush(self._x11_display)
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        self._resize_embedded_window()
+
+    def _fail(self, reason: str):
+        self._poll_timer.stop()
+        self._status_lbl.setText(f'Embedded RViz unavailable\n{reason}')
+        self.stop()
+        self.embed_failed.emit(reason)
+
+    def stop(self):
+        if self._process is None:
+            return
+        if self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+        self._process = None
+        self._rviz_window_id = None
+        if self._x11 is not None and self._x11_display is not None:
+            self._x11.XCloseDisplay(self._x11_display)
+        self._x11_display = None
+
+    def closeEvent(self, event):  # noqa: N802 (Qt API)
+        self.stop()
+        super().closeEvent(event)
+
+
 class MapPanel(QtWidgets.QWidget):
     """2D top-down view: SLAM map + camera coverage + robot + survivors."""
 
@@ -381,6 +772,8 @@ class MapPanel(QtWidgets.QWidget):
         self._map: Optional[OccupancyGrid] = None
         self._costmap: Optional[OccupancyGrid] = None
         self._cov: Optional[OccupancyGrid] = None
+        self._scan_points: list[tuple[float, float]] = []
+        self._plan_points: list[tuple[float, float]] = []
         self._robot_xy: Optional[tuple] = None
         self._zones: Optional[MarkerArray] = None
         self._waypoints: Optional[MarkerArray] = None
@@ -393,6 +786,8 @@ class MapPanel(QtWidgets.QWidget):
             'map': True,
             'costmap': True,
             'coverage': True,
+            'scan': True,
+            'plan': True,
             'zones': True,
             'waypoints': True,
             'robot': True,
@@ -432,6 +827,8 @@ class MapPanel(QtWidgets.QWidget):
         self._map = snap['map']
         self._costmap = snap['costmap']
         self._cov = snap['coverage']
+        self._scan_points = snap['scan_points']
+        self._plan_points = snap['plan_points']
         self._robot_xy = snap['robot_xy']
         self._zones = snap['zones']
         self._waypoints = snap['waypoints']
@@ -470,6 +867,12 @@ class MapPanel(QtWidgets.QWidget):
                 p, self._costmap,
                 self._cached_grid_image('costmap', self._costmap, self._costmap_image),
             )
+
+        if self._layers['scan']:
+            self._draw_scan(p)
+
+        if self._layers['plan']:
+            self._draw_plan(p)
 
         if self._layers['zones'] and self._zones is not None:
             self._draw_zones(p, self._zones)
@@ -594,11 +997,11 @@ class MapPanel(QtWidgets.QWidget):
     def _map_image(grid: OccupancyGrid) -> QtGui.QImage:
         H, W = grid.info.height, grid.info.width
         arr = np.asarray(grid.data, dtype=np.int8).reshape((H, W))
-        a = np.full((H, W), 0xff, dtype=np.uint32)
+        a = np.where(arr == -1, 70, 180).astype(np.uint32)
         occupied = arr >= 65
-        r = np.where(arr == -1, 0x37, np.where(occupied, 0x11, 0xd1)).astype(np.uint32)
-        g = np.where(arr == -1, 0x41, np.where(occupied, 0x18, 0xd5)).astype(np.uint32)
-        b = np.where(arr == -1, 0x51, np.where(occupied, 0x27, 0xdb)).astype(np.uint32)
+        r = np.where(arr == -1, 0x80, np.where(occupied, 0x20, 0xee)).astype(np.uint32)
+        g = np.where(arr == -1, 0x8a, np.where(occupied, 0x20, 0xee)).astype(np.uint32)
+        b = np.where(arr == -1, 0x90, np.where(occupied, 0x20, 0xee)).astype(np.uint32)
         packed = (a << 24) | (r << 16) | (g << 8) | b
         return QtGui.QImage(
             packed.astype(np.uint32).tobytes(), W, H, W * 4,
@@ -611,7 +1014,7 @@ class MapPanel(QtWidgets.QWidget):
         arr = np.asarray(grid.data, dtype=np.int8).reshape((H, W))
         rgba = np.zeros((H, W, 4), dtype=np.uint8)
         seen = arr == 0
-        rgba[seen] = [80, 220, 130, 80]
+        rgba[seen] = [90, 210, 210, 110]
         return QtGui.QImage(
             rgba.tobytes(), W, H, W * 4, QtGui.QImage.Format_RGBA8888
         ).copy()
@@ -623,21 +1026,21 @@ class MapPanel(QtWidgets.QWidget):
         cost = np.clip(arr, 0, 100).astype(np.float32) / 100.0
         active = arr > 0
         rgba = np.zeros((H, W, 4), dtype=np.uint8)
-        rgba[..., 0] = 255
-        rgba[..., 1] = np.clip(180 * (1.0 - cost), 20, 180).astype(np.uint8)
-        rgba[..., 2] = np.clip(40 * (1.0 - cost), 0, 40).astype(np.uint8)
-        rgba[..., 3] = np.where(active, (80 + 120 * cost).astype(np.uint8), 0)
+        rgba[..., 0] = np.where(cost > 0.75, 255, 210).astype(np.uint8)
+        rgba[..., 1] = np.clip(150 * (1.0 - cost), 40, 150).astype(np.uint8)
+        rgba[..., 2] = np.clip(170 * (1.0 - cost), 70, 170).astype(np.uint8)
+        rgba[..., 3] = np.where(active, (60 + 80 * cost).astype(np.uint8), 0)
         return QtGui.QImage(
             rgba.tobytes(), W, H, W * 4, QtGui.QImage.Format_RGBA8888
         ).copy()
 
     def _draw_grid(self, painter: QtGui.QPainter, grid: OccupancyGrid):
         rect = self._grid_rect(grid)
-        pen = QtGui.QPen(QtGui.QColor(60, 120, 220, 150))
+        pen = QtGui.QPen(QtGui.QColor(160, 160, 164, 120))
         pen.setCosmetic(True)
         pen.setWidth(1)
         painter.setPen(pen)
-        step = 10.0
+        step = 1.0
         x = np.floor(rect.left() / step) * step
         while x <= rect.right():
             painter.drawLine(QtCore.QPointF(x, rect.top()), QtCore.QPointF(x, rect.bottom()))
@@ -646,6 +1049,27 @@ class MapPanel(QtWidgets.QWidget):
         while y <= rect.bottom():
             painter.drawLine(QtCore.QPointF(rect.left(), y), QtCore.QPointF(rect.right(), y))
             y += step
+
+    def _draw_scan(self, painter: QtGui.QPainter):
+        if not self._scan_points:
+            return
+        pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 235))
+        pen.setCosmetic(True)
+        pen.setWidth(3)
+        painter.setPen(pen)
+        for x, y in self._scan_points:
+            painter.drawPoint(QtCore.QPointF(x, y))
+
+    def _draw_plan(self, painter: QtGui.QPainter):
+        if len(self._plan_points) < 2:
+            return
+        pen = QtGui.QPen(QtGui.QColor(25, 255, 0, 240))
+        pen.setCosmetic(True)
+        pen.setWidth(2)
+        painter.setPen(pen)
+        points = [QtCore.QPointF(x, y) for x, y in self._plan_points]
+        for start, end in zip(points, points[1:]):
+            painter.drawLine(start, end)
 
     @staticmethod
     def _marker_color(marker, fallback: QtGui.QColor) -> QtGui.QColor:
@@ -664,9 +1088,11 @@ class MapPanel(QtWidgets.QWidget):
             if marker.action != 0 or marker.ns != 'coverage_zones':
                 continue
             if marker.type == 4 and len(marker.points) >= 2:  # LINE_STRIP
-                pen = QtGui.QPen(self._marker_color(marker, QtGui.QColor('#60a5fa')))
+                color = self._marker_color(marker, QtGui.QColor('#60a5fa'))
+                is_current_zone = marker.color.g > 0.9 and marker.color.r < 0.5
+                pen = QtGui.QPen(color)
                 pen.setCosmetic(True)
-                pen.setWidth(2)
+                pen.setWidth(8 if is_current_zone else 2)
                 painter.setPen(pen)
                 points = [QtCore.QPointF(pt.x, pt.y) for pt in marker.points]
                 for start, end in zip(points, points[1:]):
@@ -1094,7 +1520,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         map_box = QtWidgets.QGroupBox('맵 + 로봇 + 생존자')
         map_layout = QtWidgets.QVBoxLayout(map_box)
+        self._map_layout = map_layout
         self.map_panel = MapPanel()
+        self._rviz_panel: Optional[EmbeddedRvizPanel] = None
+        self._map_widget: QtWidgets.QWidget = self.map_panel
+        if self._use_embedded_rviz():
+            self._rviz_panel = EmbeddedRvizPanel()
+            self._rviz_panel.embed_failed.connect(self._fallback_to_qt_map)
+            self._map_widget = self._rviz_panel
+
         map_controls = QtWidgets.QHBoxLayout()
         map_controls.setSpacing(8)
 
@@ -1102,6 +1536,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 ('SLAM', 'map'),
                 ('Cost', 'costmap'),
                 ('Coverage', 'coverage'),
+                ('Scan', 'scan'),
+                ('Plan', 'plan'),
                 ('Zones', 'zones'),
                 ('Waypoints', 'waypoints'),
                 ('Robot', 'robot'),
@@ -1155,7 +1591,7 @@ class MainWindow(QtWidgets.QMainWindow):
         map_controls.addWidget(fit_btn)
 
         map_layout.addLayout(map_controls)
-        map_layout.addWidget(self.map_panel)
+        map_layout.addWidget(self._map_widget)
         layout.addWidget(map_box, 4)
 
         mode_box = QtWidgets.QGroupBox('주행 모드')
@@ -1209,6 +1645,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.map_panel.update_state(snap)
         self.status_panel.update_state(snap, time.time() - self._t0)
 
+    @staticmethod
+    def _use_embedded_rviz() -> bool:
+        backend = os.environ.get('COBOT_GUI_MAP_BACKEND', 'qt').strip().lower()
+        return backend in ('rviz', 'embedded_rviz', 'embedded-rviz')
+
+    def _fallback_to_qt_map(self, reason: str):
+        if self._map_widget is self.map_panel:
+            return
+        old_widget = self._map_widget
+        index = self._map_layout.indexOf(old_widget)
+        if index < 0:
+            index = self._map_layout.count()
+        self._map_layout.removeWidget(old_widget)
+        old_widget.setParent(None)
+        old_widget.deleteLater()
+        self._map_layout.insertWidget(index, self.map_panel)
+        self._map_widget = self.map_panel
+        self._rviz_panel = None
+        self.statusBar().showMessage(
+            f'RViz 임베드 실패: {reason}. 기존 Qt 맵으로 전환했습니다.',
+            8000,
+        )
+
     def _delete_survivor(self, survivor_id: int):
         self._ros.delete_survivor(survivor_id)
 
@@ -1258,6 +1717,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):  # noqa: N802 (Qt API)
         self._pressed_keys.clear()
         self._ros.publish_teleop_stop()
+        if self._rviz_panel is not None:
+            self._rviz_panel.stop()
         super().closeEvent(event)
 
     def _set_autonomous_mode(self, checked=False):

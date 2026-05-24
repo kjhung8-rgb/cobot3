@@ -73,6 +73,27 @@ def _sphere_marker_msg(
     return m
 
 
+def _label_marker_msg(
+    pose: PoseStamped, label: str, z_lift: float, text_height: float, marker_id: int
+) -> Marker:
+    m = Marker()
+    m.header = pose.header
+    m.ns = "survivor"
+    m.id = marker_id
+    m.type = Marker.TEXT_VIEW_FACING
+    m.action = Marker.ADD
+    m.pose.position.x = pose.pose.position.x
+    m.pose.position.y = pose.pose.position.y
+    m.pose.position.z = pose.pose.position.z + z_lift
+    m.pose.orientation.w = 1.0
+    m.scale.z = text_height
+    col = ColorRGBA()
+    col.r, col.g, col.b, col.a = 1.0, 1.0, 1.0, 1.0
+    m.color = col
+    m.text = label
+    return m
+
+
 def _delete_marker_msg(frame_id: str, marker_id: int) -> Marker:
     m = Marker()
     m.header.frame_id = frame_id
@@ -102,6 +123,8 @@ class SurvivorPoseToMarker(Node):
         self.declare_parameter("delete_marker_frame", "map")
         self.declare_parameter("marker_half_size", 0.75)
         self.declare_parameter("marker_z_lift", 0.15)
+        self.declare_parameter("label_z_lift", 0.8)
+        self.declare_parameter("label_text_height", 0.45)
         self.declare_parameter("line_width", 0.12)
         self.declare_parameter("sphere_diameter", 0.4)
         self.declare_parameter("accumulate_markers", True)
@@ -121,6 +144,12 @@ class SurvivorPoseToMarker(Node):
         )
         self._half = self.get_parameter("marker_half_size").get_parameter_value().double_value
         self._z_lift = self.get_parameter("marker_z_lift").get_parameter_value().double_value
+        self._label_z_lift = (
+            self.get_parameter("label_z_lift").get_parameter_value().double_value
+        )
+        self._label_text_height = (
+            self.get_parameter("label_text_height").get_parameter_value().double_value
+        )
         self._line_width = self.get_parameter("line_width").get_parameter_value().double_value
         self._sphere_diameter = (
             self.get_parameter("sphere_diameter").get_parameter_value().double_value
@@ -150,26 +179,35 @@ class SurvivorPoseToMarker(Node):
             f"delete_sub {delete_topic} (accumulate={self._accumulate})"
         )
 
-    def _next_marker_ids(self) -> tuple[int, int, int]:
+    def _next_marker_ids(self) -> tuple[int, int, int, int]:
         if self._accumulate:
             survivor_id = self._next_pose_index + 1
             base = self._marker_base_id(survivor_id)
             self._next_pose_index += 1
-            return survivor_id, base, base + 1
-        return 1, 0, 1
+            return survivor_id, base, base + 1, base + 2
+        return 1, 0, 1, 2
 
     @staticmethod
     def _marker_base_id(survivor_id: int) -> int:
-        return (survivor_id - 1) * 2
+        return (survivor_id - 1) * 3
 
     def _cb(self, msg: PoseStamped):
         self._last_marker_frame = msg.header.frame_id or self._delete_frame
-        survivor_id, x_id, sphere_id = self._next_marker_ids()
+        survivor_id, x_id, sphere_id, label_id = self._next_marker_ids()
         self._pub.publish(
             _x_marker_msg(msg, self._half, self._z_lift, self._line_width, x_id)
         )
         self._pub.publish(
             _sphere_marker_msg(msg, self._sphere_diameter, self._z_lift, sphere_id)
+        )
+        self._pub.publish(
+            _label_marker_msg(
+                msg,
+                f"#{survivor_id}",
+                self._label_z_lift,
+                self._label_text_height,
+                label_id,
+            )
         )
 
         if self._log_each:
@@ -177,7 +215,8 @@ class SurvivorPoseToMarker(Node):
             o = msg.pose.orientation
             self.get_logger().info(
                 f"[survivor marker #{survivor_id}] "
-                f"marker_ids=({x_id}, {sphere_id}) frame={msg.header.frame_id} "
+                f"marker_ids=({x_id}, {sphere_id}, {label_id}) "
+                f"frame={msg.header.frame_id} "
                 f"xyz=({p.x:.3f}, {p.y:.3f}, {p.z:.3f}) "
                 f"quat_xyzw=({o.x:.3f}, {o.y:.3f}, {o.z:.3f}, {o.w:.3f})"
             )
@@ -203,18 +242,23 @@ class SurvivorPoseToMarker(Node):
         if self._accumulate:
             x_id = self._marker_base_id(survivor_id)
             sphere_id = x_id + 1
+            label_id = x_id + 2
         else:
-            x_id, sphere_id = 0, 1
+            x_id, sphere_id, label_id = 0, 1, 2
 
         stamp = self.get_clock().now().to_msg()
         x_delete = _delete_marker_msg(frame_id, x_id)
         sphere_delete = _delete_marker_msg(frame_id, sphere_id)
+        label_delete = _delete_marker_msg(frame_id, label_id)
         x_delete.header.stamp = stamp
         sphere_delete.header.stamp = stamp
+        label_delete.header.stamp = stamp
         self._pub.publish(x_delete)
         self._pub.publish(sphere_delete)
+        self._pub.publish(label_delete)
         self.get_logger().info(
-            f"deleted survivor marker #{survivor_id} marker_ids=({x_id}, {sphere_id})"
+            f"deleted survivor marker #{survivor_id} "
+            f"marker_ids=({x_id}, {sphere_id}, {label_id})"
         )
 
 
