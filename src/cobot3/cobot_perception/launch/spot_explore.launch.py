@@ -20,6 +20,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -79,6 +80,7 @@ def generate_launch_description():
     yolo_model = os.path.join(pkg_yolo, "models", "yolov8s.pt")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
+    launch_rviz = LaunchConfiguration("launch_rviz")
 
     return LaunchDescription(
         [
@@ -86,6 +88,11 @@ def generate_launch_description():
                 "use_sim_time",
                 default_value="false",
                 description="Use /clock. Isaac extension publishes system time stamps.",
+            ),
+            DeclareLaunchArgument(
+                "launch_rviz",
+                default_value="true",
+                description="Start the standalone RViz window.",
             ),
             Node(
                 package="cobot_core",
@@ -243,6 +250,7 @@ def generate_launch_description():
                 output="screen",
                 arguments=["-d", rviz_cfg],
                 parameters=[{"use_sim_time": use_sim_time}],
+                condition=IfCondition(launch_rviz),
             ),
         ]
     )
