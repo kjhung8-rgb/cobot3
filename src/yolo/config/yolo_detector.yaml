@@ -23,6 +23,7 @@ yolo_detector:
       - /spot_0/yolo/left_annotated_image
       - /spot_0/yolo/right_annotated_image
     detected_topic: /spot_0/yolo/person_detected
+    slowdown_required_topic: /spot_0/yolo/slowdown_required
     base_pose_topic: /spot_0/yolo/person_pose_base
     survivor_pose_topic: /detected_survivor_pose
     survivor_delete_topic: /survivor_delete_id

@@ -175,6 +175,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {"enable_person_dampening": True},
+                    {"slowdown_required_topic": "/spot_0/yolo/slowdown_required"},
                     {"dampening_factor": float(speed["yolo_speed_factor"])},
                     {"dampening_hold_sec": float(speed["yolo_hold_sec"])},
                 ],
@@ -222,6 +223,10 @@ def generate_launch_description():
                             {"spin_duration_sec": 4.0},
                             {"spin_speed_rad_s": float(speed["default_angular_radps"])},
                             {"skip_already_seen": True},
+                            {"use_start_pose_as_home": True},
+                            {"auto_return_enabled": True},
+                            {"auto_return_coverage_threshold": 0.95},
+                            {"auto_return_hold_sec": 5.0},
                             # Zone partitioning: 15m × 15m. With 4m
                             # waypoint spacing each zone has ~12 waypoints
                             # → meaningful "stay and finish current area
