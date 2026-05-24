@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import carb
 import numpy as np
 import omni
 import omni.timeline
@@ -12,11 +13,17 @@ import omni.usd
 from pxr import Gf, UsdGeom
 
 from isaacsim.examples.interactive.base_sample import BaseSample
+from isaacsim.core.prims import SingleArticulation
 from isaacsim.core.utils.stage import add_reference_to_stage
 from isaacsim.robot.policy.examples.robots import SpotFlatTerrainPolicy
+from isaacsim.storage.native import get_assets_root_path
 
 from .constants import (
     CAMERA_SPECS,
+    CARTER_PRIM_PATH,
+    CARTER_SPAWN_POSITION,
+    CARTER_SPAWN_YAW_DEG,
+    CARTER_USD_NUCLEUS_PATH,
     SPOT_PRIM_PATH,
     SPOT_SPAWN_POSITION,
     SPOT_SPAWN_YAW_DEG,
@@ -89,11 +96,31 @@ class SpotFireRescue(BaseSample):
         print("[cobot3.spot] Spot RL 정책 로드 완료")
 
         self._add_cameras()
+        self._add_carter()
 
         timeline = omni.timeline.get_timeline_interface()
         self._event_timer_callback = timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
             int(omni.timeline.TimelineEventType.PLAY), self._on_timeline_play
         )
+
+    def _add_carter(self):
+        """Spawn Nova Carter co-located with Spot. cobot3.carter [TEST]
+        extension owns all ROS graph setup against /World/Carter."""
+        assets_root_path = get_assets_root_path()
+        if assets_root_path is None:
+            carb.log_error("[cobot3.spot] Carter co-spawn: Isaac assets root 못 찾음")
+            return
+
+        carter_usd = assets_root_path + CARTER_USD_NUCLEUS_PATH
+        add_reference_to_stage(usd_path=carter_usd, prim_path=CARTER_PRIM_PATH)
+
+        self.carter = SingleArticulation(
+            prim_path=CARTER_PRIM_PATH,
+            name="Carter",
+            position=np.array(CARTER_SPAWN_POSITION, dtype=np.float64),
+            orientation=_yaw_to_quat_wxyz(CARTER_SPAWN_YAW_DEG),
+        )
+        print(f"[cobot3.spot] Carter co-spawn: {carter_usd}")
 
     def _add_cameras(self):
         """Add camera prims used by YOLO/depth localization."""
