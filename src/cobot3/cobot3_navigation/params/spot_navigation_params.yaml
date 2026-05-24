@@ -121,8 +121,8 @@ velocity_smoother:
     min_velocity: [-0.50, -0.50, -2.40]
     deadband_velocity: [0.0, 0.0, 0.0] 
     velocity_timeout: 1.0 
-    max_accel: [1.0, 0.6, 1.2] 
-    max_decel: [-1.0, -0.6, -1.2] 
+    max_accel: [1.5, 0.8, 1.5] 
+    max_decel: [-1.5, -0.8, -1.5] 
     odom_topic: "/spot_0/odom" 
     odom_duration: 0.1
 
@@ -160,7 +160,7 @@ controller_server:
       vy_std: 0.15
       wz_std: 0.30
       # Exploration cruise limit. Absolute clamp remains in velocity_smoother.
-      vx_max: 1.90
+      vx_max: 2.20
       vx_min: -0.50
       vy_max: 0.50
       wz_max: 1.90

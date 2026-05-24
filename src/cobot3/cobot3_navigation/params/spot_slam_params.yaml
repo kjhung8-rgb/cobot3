@@ -23,7 +23,7 @@ slam_toolbox:
     stack_size_to_use: 40000000
 
     # Loop closure
-    do_loop_closing: true
+    do_loop_closing: false
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
     loop_match_minimum_response_coarse: 0.35
