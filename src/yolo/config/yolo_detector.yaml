@@ -29,7 +29,9 @@ yolo_detector:
     survivor_delete_topic: /survivor_delete_id
     base_frame: spot_0/base_link
     target_frame: map
-    confidence_threshold: 0.4
+    # 0.15는 Isaac 캐릭터 첫 detection 잡기에는 좋지만 false positive(벽/박스)도
+    # 많이 생성. 0.35~0.40이 균형점.
+    confidence_threshold: 0.35
     device: cuda
     imgsz: 640
     inference_period_sec: 0.2
@@ -41,7 +43,9 @@ yolo_detector:
     sync_slop_sec: 0.08
     depth_sample_radius_px: 5
     min_depth_m: 0.2
-    max_depth_m: 30.0
+    # 30m면 spot이 멀리 있는 사람을 depth noise 크게 받음 → 좌표 잘못 잡힘.
+    # 가까이서만 trust해 카메라 시점에 따른 좌표 jump를 줄임.
+    max_depth_m: 8.0
     pose_publish_period_sec: 1.0
     project_target_pose_to_ground: true
     optical_to_camera_link: true
@@ -49,8 +53,10 @@ yolo_detector:
     capture_dir: src/yolo/dectected_person
     capture_period_sec: 2.0
     capture_annotated: true
-    survivor_match_radius_m: 1.0
-    candidate_match_radius_m: 0.8
+    # 같은 사람이 카메라 시점/depth noise로 1~2m jump 흔함.
+    # 3m로 두면 같은 사람 perception noise 흡수, 다른 사람과 구별 가능.
+    survivor_match_radius_m: 3.0
+    candidate_match_radius_m: 2.0
     new_survivor_confirmations: 1
     candidate_ttl_sec: 10.0
     depth_roi_x_min_ratio: 0.30
