@@ -917,7 +917,7 @@ class CoveragePathPlanner(Node):
             outline.type = Marker.LINE_STRIP
             outline.action = Marker.ADD
             outline.pose.orientation.w = 1.0
-            outline.scale.x = 0.1  # line thickness
+            outline.scale.x = 0.4 if is_current else 0.1  # line thickness
             outline.color = c
             outline.points = [
                 _pt(x0, y0), _pt(x1, y0), _pt(x1, y1), _pt(x0, y1), _pt(x0, y0),
