@@ -1041,7 +1041,8 @@ class MainWindow(QtWidgets.QMainWindow):
     TELEOP_DEFAULT_LINEAR_SPEED = 0.5
     TELEOP_DEFAULT_ANGULAR_SPEED = 1.0
     TELEOP_MIN_SPEED = 0.1
-    TELEOP_MAX_SPEED = 3.0
+    TELEOP_MAX_LINEAR_SPEED = 2.0
+    TELEOP_MAX_ANGULAR_SPEED = 2.5
     TELEOP_SPEED_STEP = 0.1
 
     def __init__(self, ros_node: MonitorRosNode, launch_t0: float):
@@ -1318,11 +1319,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _adjust_teleop_speed(self, delta: float):
         self._teleop_linear_speed = min(
             max(self._teleop_linear_speed + delta, self.TELEOP_MIN_SPEED),
-            self.TELEOP_MAX_SPEED,
+            self.TELEOP_MAX_LINEAR_SPEED,
         )
         self._teleop_angular_speed = min(
             max(self._teleop_angular_speed + delta, self.TELEOP_MIN_SPEED),
-            self.TELEOP_MAX_SPEED,
+            self.TELEOP_MAX_ANGULAR_SPEED,
         )
         self.teleop_speed_lbl.setText(self._teleop_speed_text())
         self._publish_current_teleop()
