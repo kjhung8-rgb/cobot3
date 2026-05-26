@@ -228,6 +228,8 @@ def generate_launch_description():
                         parameters=[
                             {"use_sim_time": use_sim_time},
                             {"waypoint_spacing_m": 4.5},
+                            {"min_free_component_area_m2": 1.0},
+                            {"goal_clearance_radius_m": 0.35},
                             {"do_spin_at_waypoint": False},
                             {"spin_duration_sec": 11.0},
                             {"spin_speed_rad_s": 0.6},

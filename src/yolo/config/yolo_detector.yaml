@@ -29,9 +29,9 @@ yolo_detector:
     survivor_delete_topic: /survivor_delete_id
     base_frame: spot_0/base_link
     target_frame: map
-    # 0.15는 Isaac 캐릭터 첫 detection 잡기에는 좋지만 false positive(벽/박스)도
-    # 많이 생성. 0.35~0.40이 균형점.
-    confidence_threshold: 0.35
+    # Only high-confidence person boxes are localized. Boxes below this are
+    # ignored before depth sampling, pose publishing, and survivor markers.
+    confidence_threshold: 0.65
     device: cuda
     imgsz: 640
     inference_period_sec: 0.2

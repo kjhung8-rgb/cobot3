@@ -31,7 +31,7 @@ from .constants import (
 
 
 SPOT_EXTENSION_DIR = Path(__file__).resolve().parents[2]
-WAREHOUSE_USD_PATH = SPOT_EXTENSION_DIR / "usd" / "warehouse_small.usd"
+WAREHOUSE_USD_PATH = SPOT_EXTENSION_DIR / "usd" / "g8.usd"
 
 
 def _yaw_to_quat_wxyz(yaw_deg):

@@ -67,6 +67,8 @@ class CoveragePathPlanner(Node):
         self.declare_parameter('return_home_topic', '/coverage_planner/return_home')
 
         self.declare_parameter('waypoint_spacing_m', 2.0)
+        self.declare_parameter('min_free_component_area_m2', 1.0)
+        self.declare_parameter('goal_clearance_radius_m', 0.35)
         self.declare_parameter('tick_period_sec', 1.5)
         self.declare_parameter('replan_period_sec', 8.0)
         self.declare_parameter('startup_delay_sec', 8.0)
@@ -95,6 +97,12 @@ class CoveragePathPlanner(Node):
         self.declare_parameter('spin_speed_rad_s', 1.0)
 
         self._wp_spacing = float(self.get_parameter('waypoint_spacing_m').value)
+        self._min_free_component_area = float(
+            self.get_parameter('min_free_component_area_m2').value
+        )
+        self._goal_clearance_radius = float(
+            self.get_parameter('goal_clearance_radius_m').value
+        )
         self._replan_period = float(self.get_parameter('replan_period_sec').value)
         self._map_frame = self.get_parameter('map_frame').value
         self._robot_frame = self.get_parameter('robot_frame').value
@@ -460,6 +468,13 @@ class CoveragePathPlanner(Node):
 
         arr = np.array(self._costmap.data, dtype=np.int8).reshape((H, W))
         spacing_cells = max(1, int(round(self._wp_spacing / res)))
+        component_ids, component_sizes = self._free_components(arr)
+        min_component_cells = max(
+            1, int(math.ceil(self._min_free_component_area / (res * res)))
+        )
+        clearance_cells = max(
+            0, int(math.ceil(self._goal_clearance_radius / res))
+        )
 
         # Optional camera-seen check — skip waypoint if its surrounding disk
         # in /camera_coverage is already seen.
@@ -477,6 +492,8 @@ class CoveragePathPlanner(Node):
                 seen_r_cells = max(1, int(round(self._seen_skip_radius / res)))
 
         new_wps: Dict[WaypointKey, Dict] = {}
+        skipped_small_component = 0
+        skipped_clearance = 0
         skipped_seen = 0
         # For each ``spacing_cells × spacing_cells`` window of the grid, find
         # the FREE costmap cell closest to the window centre and put one
@@ -500,6 +517,14 @@ class CoveragePathPlanner(Node):
                 idx = int(np.argmin(d2))
                 gy = int(free_ys[idx])
                 gx = int(free_xs[idx])
+                component_id = int(component_ids[gy, gx])
+                component_size = component_sizes.get(component_id, 0)
+                if component_size < min_component_cells:
+                    skipped_small_component += 1
+                    continue
+                if not self._has_goal_clearance(arr, gx, gy, clearance_cells):
+                    skipped_clearance += 1
+                    continue
                 # Skip if waypoint disk is already mostly camera-seen
                 if cov_aligned:
                     sy0 = max(0, gy - seen_r_cells)
@@ -527,10 +552,58 @@ class CoveragePathPlanner(Node):
         visited_count = sum(1 for w in new_wps.values() if w['visited'])
         self.get_logger().info(
             f'replan: {len(new_wps)} waypoints (+{added} new, -{removed} dropped, '
+            f'{skipped_small_component} skipped small-free-area, '
+            f'{skipped_clearance} skipped low-clearance, '
             f'{skipped_seen} skipped already-seen), {visited_count} visited'
         )
         self._publish_zone_viz()
         self._publish_waypoint_viz()
+
+    def _free_components(self, arr: np.ndarray) -> Tuple[np.ndarray, Dict[int, int]]:
+        """Label connected FREE_SPACE regions so tiny pockets can be ignored."""
+        H, W = arr.shape
+        free = arr == 0
+        labels = np.zeros((H, W), dtype=np.int32)
+        sizes: Dict[int, int] = {}
+        component_id = 0
+
+        for start_y, start_x in zip(*np.where(free & (labels == 0))):
+            component_id += 1
+            stack = [(int(start_x), int(start_y))]
+            labels[start_y, start_x] = component_id
+            size = 0
+            while stack:
+                x, y = stack.pop()
+                size += 1
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if nx < 0 or nx >= W or ny < 0 or ny >= H:
+                        continue
+                    if not free[ny, nx] or labels[ny, nx] != 0:
+                        continue
+                    labels[ny, nx] = component_id
+                    stack.append((nx, ny))
+            sizes[component_id] = size
+
+        return labels, sizes
+
+    def _has_goal_clearance(
+        self, arr: np.ndarray, gx: int, gy: int, radius_cells: int
+    ) -> bool:
+        if radius_cells <= 0:
+            return True
+        H, W = arr.shape
+        y0 = gy - radius_cells
+        y1 = gy + radius_cells + 1
+        x0 = gx - radius_cells
+        x1 = gx + radius_cells + 1
+        if y0 < 0 or x0 < 0 or y1 > H or x1 > W:
+            return False
+
+        sub = arr[y0:y1, x0:x1]
+        yy, xx = np.ogrid[-radius_cells:radius_cells + 1,
+                          -radius_cells:radius_cells + 1]
+        disk = (xx * xx + yy * yy) <= radius_cells * radius_cells
+        return bool(np.all(sub[disk] == 0))
 
     def _pick_next_waypoint(self) -> Optional[WaypointKey]:
         """If zoning is on: finish current zone before moving on. Otherwise
