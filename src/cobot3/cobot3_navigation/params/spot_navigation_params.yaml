@@ -157,12 +157,14 @@ controller_server:
       model_dt: 0.05
       batch_size: 1800
       vx_std: 0.20
-      vy_std: 0.15
+      vy_std: 0.0
       wz_std: 0.30
-      # Exploration cruise limit. Absolute clamp remains in velocity_smoother.
+      # Forward-only exploration: vx_min=0 prevents reverse, vy_max=0 prevents
+      # lateral strafe. motion_model: DiffDrive forces in-place turn before
+      # driving so the camera always faces the direction of travel.
       vx_max: 1.90
-      vx_min: -0.50
-      vy_max: 0.50
+      vx_min: 0.0
+      vy_max: 0.0
       wz_max: 1.90
       ax_max: 2.0
       ax_min: -2.0
@@ -174,7 +176,7 @@ controller_server:
       transform_tolerance: 0.2
       temperature: 0.3
       gamma: 0.015
-      motion_model: "Omni"
+      motion_model: "DiffDrive"
       visualize: true
       regenerate_noises: true
       critics:
@@ -206,7 +208,7 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 2.0
+        cost_weight: 10.0
         threshold_to_consider: 0.5
       CostCritic:
         enabled: true

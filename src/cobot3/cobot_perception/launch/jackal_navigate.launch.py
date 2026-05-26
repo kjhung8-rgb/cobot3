@@ -1,0 +1,172 @@
+# Stage 3 — Jackal NAV2 stack.
+#
+# Spot and Jackal share the same ROS_DOMAIN_ID (default 141). Jackal's NAV2
+# lives entirely under /jackal_0 so it coexists with Spot's stack without
+# node-name or topic clashes.
+#
+# Jackal uses Spot's SLAM /map for path planning. No LiDAR or AMCL required —
+# localization comes from the static map→jackal_0/odom TF set by
+# jackal_localize.launch.py. Spot's position is tracked in jackal's costmap via
+# SpotObstaclePublisher (dual PointCloud2: clearing at 2m, marking at 0.5m),
+# giving a ~1m exclusion zone around Spot (after costmap inflation).
+#
+# Same RewrittenYaml + explicit Node namespace pattern as carter_navigate.
+#
+# Prerequisites (all on the same ROS_DOMAIN_ID):
+#   - cobot3.spot Isaac extension: Load Scene (Jackal) + Play + Setup Spot ROS
+#   - cobot3.spot Jackal button: J. Setup Jackal ROS (CmdVel + Odom/TF)
+#   - jackal_localize.launch.py running (provides static map→jackal_0/odom TF)
+#   - Spot SLAM running (provides /map + spot_0/base_link TF for obstacle publisher)
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterFile
+from nav2_common.launch import RewrittenYaml
+
+
+JACKAL_NS = "jackal_0"
+
+LIFECYCLE_NODES = [
+    "controller_server",
+    "smoother_server",
+    "planner_server",
+    "behavior_server",
+    "bt_navigator",
+    "waypoint_follower",
+    "velocity_smoother",
+]
+
+
+def generate_launch_description():
+    pkg_nav = get_package_share_directory("cobot3_navigation")
+    nav2_params = os.path.join(pkg_nav, "params", "jackal_nav2_params.yaml")
+
+    use_sim_time = LaunchConfiguration("use_sim_time")
+    autostart = LaunchConfiguration("autostart")
+
+    configured_params = ParameterFile(
+        RewrittenYaml(
+            source_file=nav2_params,
+            root_key=JACKAL_NS,
+            param_rewrites={
+                "use_sim_time": use_sim_time,
+                "autostart": autostart,
+            },
+            convert_types=True,
+        ),
+        allow_substs=True,
+    )
+
+    common_node_kwargs = dict(
+        namespace=JACKAL_NS,
+        output="screen",
+        parameters=[configured_params],
+    )
+
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "use_sim_time",
+                default_value="false",
+                description="Use /clock. Isaac publishes system-time stamps.",
+            ),
+            DeclareLaunchArgument(
+                "autostart",
+                default_value="true",
+                description="Auto-bring lifecycle nodes to active.",
+            ),
+            # Spot obstacle publisher: tracks spot_0/base_link via TF, publishes
+            # dual PointCloud2 topics for jackal's costmap obstacle_layer.
+            Node(
+                package="cobot_perception",
+                executable="spot_obstacle_publisher",
+                name="spot_obstacle_publisher",
+                output="screen",
+                parameters=[
+                    {"publish_rate_hz": 5.0},
+                    {"mark_radius_m": 0.5},
+                    {"clear_radius_m": 2.0},
+                    {"mark_topic": "/spot_marking_cloud"},
+                    {"clear_topic": "/spot_clearing_cloud"},
+                    {"spot_frame": "spot_0/base_link"},
+                ],
+            ),
+            Node(
+                package="nav2_controller",
+                executable="controller_server",
+                name="controller_server",
+                remappings=[("cmd_vel", "cmd_vel_nav")],
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_smoother",
+                executable="smoother_server",
+                name="smoother_server",
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_planner",
+                executable="planner_server",
+                name="planner_server",
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_behaviors",
+                executable="behavior_server",
+                name="behavior_server",
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_bt_navigator",
+                executable="bt_navigator",
+                name="bt_navigator",
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_waypoint_follower",
+                executable="waypoint_follower",
+                name="waypoint_follower",
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_velocity_smoother",
+                executable="velocity_smoother",
+                name="velocity_smoother",
+                remappings=[
+                    ("cmd_vel", "cmd_vel_nav"),
+                    ("cmd_vel_smoothed", "cmd_vel"),
+                ],
+                **common_node_kwargs,
+            ),
+            Node(
+                package="nav2_lifecycle_manager",
+                executable="lifecycle_manager",
+                name="lifecycle_manager_navigation",
+                namespace=JACKAL_NS,
+                output="screen",
+                parameters=[
+                    {"use_sim_time": use_sim_time},
+                    {"autostart": autostart},
+                    {"node_names": LIFECYCLE_NODES},
+                    {"node_timeout": 30.0},
+                    {"bond_timeout": 0.0},
+                ],
+            ),
+            Node(
+                package="cobot_perception",
+                executable="mission_manager",
+                name="mission_manager",
+                output="screen",
+                parameters=[
+                    {"input_topic": "/detected_survivor_pose"},
+                    {"nav_action": "/jackal_0/navigate_to_pose"},
+                    {"dedup_distance_m": 0.5},
+                ],
+            ),
+        ]
+    )

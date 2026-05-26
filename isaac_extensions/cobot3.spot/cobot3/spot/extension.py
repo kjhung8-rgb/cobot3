@@ -7,35 +7,46 @@ Thin UI entrypoint. Heavy logic is split into:
   - ros_graphs.py       : cmd_vel, camera, LiDAR/SLAM graph setup
   - teleop_launcher.py  : terminal launcher for spot_teleop.py
   - constants.py        : /spot_0 topic/frame contract
+
+Optional secondary robots (Carter, Jackal) are isolated in spot/carter/ and
+spot/jackal/ subpackages. Each contributes its own UI block via the three
+``build_*`` helpers in its panel.py. To drop one direction, delete the
+subpackage folder and remove the two-line panel imports + the three
+``build_*`` calls below.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-import numpy as np
 import omni.ext
 import omni.timeline
 import omni.ui as ui
 
 from .constants import (
     CAMERA_SPECS,
-    CARTER_CMD_VEL_TOPIC,
-    CARTER_ODOM_TOPIC,
-    CARTER_SCAN_TOPIC,
     CMD_VEL_TOPIC,
     ODOM_TOPIC,
     SCAN_TOPIC,
 )
-from .carter_ros_graphs import (
-    setup_carter_cmd_vel_graph,
-    setup_carter_odom_tf_graph,
-    setup_carter_scan_tf_graph,
-)
 from .ros_graphs import setup_camera_graph, setup_cmd_vel_graph, setup_slam_sensors
-from .scene import SpotFireRescue
 from .teleop_launcher import TeleopLauncher
-from .utils import get_ros_domain_id
+from ..utils import get_ros_domain_id
+
+# ── Optional secondary-robot panels ────────────────────────────────────────
+# Sibling subpackages under cobot3/ — each is fully self-contained. To drop
+# one, delete its folder and remove the matching import + the three
+# build_*_load_button/panel/topic_labels calls below.
+from ..carter.panel import (
+    build_carter_load_button,
+    build_carter_panel,
+    build_carter_topic_labels,
+)
+from ..jackal.panel import (
+    build_jackal_load_button,
+    build_jackal_panel,
+    build_jackal_topic_labels,
+)
 
 
 class Cobot3SpotExtension(omni.ext.IExt):
@@ -54,17 +65,16 @@ class Cobot3SpotExtension(omni.ext.IExt):
                 ui.Spacer(height=4)
 
                 ui.Label("[ Isaac Sim 설정 ]", style={"font_size": 12})
-                ui.Button("1. Load Scene", clicked_fn=self._load_scene)
-                ui.Button("2. Setup ROS2 CmdVel", clicked_fn=self._setup_ros2)
-                ui.Button("3. Setup Camera", clicked_fn=self._setup_camera)
-                ui.Button("4. Setup LiDAR/SLAM", clicked_fn=self._setup_slam_sensors)
+                build_carter_load_button(self)
+                build_jackal_load_button(self)
+                ui.Button(
+                    "2. Setup Spot ROS (CmdVel + Camera + LiDAR/SLAM)",
+                    clicked_fn=self._setup_spot_all,
+                )
                 ui.Spacer(height=4)
 
-                ui.Label("[ Carter ROS2 그래프 ]", style={"font_size": 12})
-                ui.Button("C1. Setup Carter CmdVel", clicked_fn=self._setup_carter_cmd_vel)
-                ui.Button("C2. Setup Carter Odom/TF", clicked_fn=self._setup_carter_odom_tf)
-                ui.Button("C3. Setup Carter LiDAR/Scan", clicked_fn=self._setup_carter_scan_tf)
-                ui.Spacer(height=4)
+                build_carter_panel(self)
+                build_jackal_panel(self)
 
                 ui.Label("[ 제어 ]", style={"font_size": 12})
                 ui.Button("Start Teleop Terminal", clicked_fn=self._start_teleop)
@@ -81,10 +91,8 @@ class Cobot3SpotExtension(omni.ext.IExt):
                     ui.Label(f"{spec['label']} RGB: {spec['color_topic']}", style={"font_size": 11})
                     ui.Label(f"{spec['label']} DEPTH: {spec['depth_topic']}", style={"font_size": 11})
                     ui.Label(f"{spec['label']} INFO: {spec['camera_info_topic']}", style={"font_size": 11})
-                ui.Spacer(height=2)
-                ui.Label(CARTER_CMD_VEL_TOPIC, style={"font_size": 11})
-                ui.Label(CARTER_ODOM_TOPIC, style={"font_size": 11})
-                ui.Label(CARTER_SCAN_TOPIC, style={"font_size": 11})
+                build_carter_topic_labels()
+                build_jackal_topic_labels()
 
         print("[cobot3.spot] UI 준비 완료")
 
@@ -94,28 +102,12 @@ class Cobot3SpotExtension(omni.ext.IExt):
             self._teleop.stop()
         self._window = None
 
-    def _load_scene(self):
-        self._sample = SpotFireRescue()
-        asyncio.ensure_future(self._sample.load_world_async())
-        print("[cobot3.spot] Scene 로딩 중... (잠시 기다려주세요)")
-
-    def _setup_ros2(self):
+    def _setup_spot_all(self):
+        """One click: spot cmd_vel + camera + LiDAR/SLAM OmniGraphs."""
         setup_cmd_vel_graph(self._sample)
-
-    def _setup_camera(self):
         setup_camera_graph(self._sample)
-
-    def _setup_slam_sensors(self):
         setup_slam_sensors(self._sample)
-
-    def _setup_carter_cmd_vel(self):
-        setup_carter_cmd_vel_graph()
-
-    def _setup_carter_odom_tf(self):
-        setup_carter_odom_tf_graph()
-
-    def _setup_carter_scan_tf(self):
-        setup_carter_scan_tf_graph()
+        print("[cobot3.spot] ✅ Spot ROS graphs all set up")
 
     def _start_teleop(self):
         self._teleop.start()

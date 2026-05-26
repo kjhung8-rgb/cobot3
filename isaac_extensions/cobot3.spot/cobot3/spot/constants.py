@@ -91,51 +91,22 @@ CAMERA_SPECS = (
     },
 )
 
+# Front-facing headlight on Spot's head. Parented under /World/Spot/body so it
+# moves with the robot. SphereLight + ShapingAPI gives a directional cone.
+# ShapingAPI cone narrows the light → intensity must be MUCH higher than a
+# bare SphereLight to be visible. Warehouse scenes also need viewport's
+# "Lights Off" toggle to be set to ON.
+HEADLIGHT_PRIM_PATH = "/World/Spot/body/headlight"
+HEADLIGHT_TRANSLATION = (0.5, 0.0, 0.35)        # 앞·중앙·머리 위
+HEADLIGHT_ROTATION_XYZ_DEG = (0.0, 90.0, 0.0)   # -Z 기본 cone을 +X(전방)로
+HEADLIGHT_INTENSITY = 800000.0                   # cone으로 좁힌 효과를 보상 (10배 상향)
+HEADLIGHT_RADIUS = 0.1                           # 더 큰 emitter → 부드러운 빛
+HEADLIGHT_CONE_ANGLE_DEG = 60.0                  # cone 반각 (전방 시야 충분히 커버)
+HEADLIGHT_COLOR_RGB = (1.0, 1.0, 0.92)           # 약간 warm white
+
 CMD_VEL_GRAPH_PATH = "/World/Spot_CmdVel_Graph"
 CAMERA_GRAPH_PATH = "/World/Spot_Camera_Graph"
 SLAM_GRAPH_PATH = "/World/Spot_SLAM_Graph"
-
-DEFAULT_ROS_DOMAIN_ID = 141
-
-# ─────────────────────────────────────────────
-# Carter (Nova Carter) — co-spawned by SpotFireRescue.setup_scene().
-# Shares the same ROS_DOMAIN_ID as spot; namespace isolation via /carter_0.
-# ─────────────────────────────────────────────
-CARTER_NS = "carter_0"
-CARTER_CMD_VEL_TOPIC = f"/{CARTER_NS}/cmd_vel"
-CARTER_ODOM_TOPIC = f"/{CARTER_NS}/odom"
-CARTER_SCAN_TOPIC = f"/{CARTER_NS}/scan"
-
-CARTER_BASE_LINK_FRAME = f"{CARTER_NS}/base_link"
-# Namespaced odom frame so it doesn't clash with spot's plain "odom" frame.
-CARTER_ODOM_FRAME = f"{CARTER_NS}/odom"
-CARTER_LIDAR_FRAME = f"{CARTER_NS}/laser"
-
-# Stage prim paths.
-CARTER_PRIM_PATH = "/World/Carter"
-CARTER_CHASSIS_PRIM_PATH = f"{CARTER_PRIM_PATH}/chassis_link"
-# BASE nova_carter.usd — Nova_Carter_ROS.usd's built-in publishers would
-# clash with our OmniGraph stack.
-CARTER_USD_NUCLEUS_PATH = "/Isaac/Robots/NVIDIA/NovaCarter/nova_carter.usd"
-CARTER_SPAWN_POSITION = (24.0, 29.0, 0.5)
-CARTER_SPAWN_YAW_DEG = 0.0
-
-# Differential drive params (Nova Carter nominal — tune if drive feels off).
-CARTER_WHEEL_JOINT_NAMES = ["joint_wheel_left", "joint_wheel_right"]
-CARTER_WHEEL_RADIUS = 0.14
-CARTER_WHEEL_DISTANCE = 0.42
-CARTER_MAX_LINEAR_SPEED = 1.0   # m/s  (0.0 = unlimited)
-CARTER_MAX_ANGULAR_SPEED = 1.5  # rad/s (0.0 = unlimited)
-
-# LiDAR mounting on /World/Carter — sensor prim auto-discovered at setup.
-CARTER_LIDAR_SENSOR_HINTS = ("front_2d_lidar", "2d_lidar", "front_lidar")
-CARTER_LIDAR_TRANSLATION = (0.0, 0.0, 0.4)
-CARTER_LIDAR_TF_ROTATION_XYZW = (0.0, 0.0, 0.0, 1.0)
-
-# OmniGraph paths.
-CARTER_CMD_VEL_GRAPH_PATH = "/World/Carter_CmdVel_Graph"
-CARTER_ODOM_TF_GRAPH_PATH = "/World/Carter_OdomTf_Graph"
-CARTER_SCAN_TF_GRAPH_PATH = "/World/Carter_ScanTf_Graph"
 
 # ROS cmd_vel to Spot policy command scale.
 CMD_VEL_TO_POLICY_LINEAR_X_SCALE = 2.0

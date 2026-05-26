@@ -1,9 +1,5 @@
 """ROS2 OmniGraph setup helpers for the co-spawned Nova Carter robot.
 
-Lives inside cobot3.spot extension so spot + carter share a single Isaac
-extension. Helpers are invoked by the carter buttons in extension.py
-*after* Spot's Load Scene (which co-spawns /World/Carter).
-
 Design rules learned the hard way:
 
 * All TF timestamps come from IsaacReadSystemTime — NOT IsaacReadSimulationTime.
@@ -43,7 +39,7 @@ from .constants import (
     CARTER_WHEEL_JOINT_NAMES,
     CARTER_WHEEL_RADIUS,
 )
-from .utils import get_ros_domain_id
+from ..utils import get_ros_domain_id
 
 
 def _carter_on_stage() -> bool:

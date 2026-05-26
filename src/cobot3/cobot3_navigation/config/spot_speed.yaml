@@ -6,8 +6,11 @@ spot_speed:
   # Absolute command limits used by velocity_smoother and Isaac policy clamp.
   max_linear_mps: 2.4
   max_angular_radps: 2.4
-  max_reverse_mps: 0.5
-  max_lateral_mps: 0.5
+  # Forward-only exploration: camera always faces direction of travel so we
+  # don't re-scan already-covered area. velocity_smoother clamps reverse and
+  # lateral to 0; controller also runs with motion_model=DiffDrive + vx_min=0.
+  max_reverse_mps: 0.0
+  max_lateral_mps: 0.0
 
   # Slowdown applied by cmd_vel_relay while YOLO is seeing a survivor.
   yolo_speed_factor: 0.3

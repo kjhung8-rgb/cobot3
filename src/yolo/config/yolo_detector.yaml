@@ -29,8 +29,8 @@ yolo_detector:
     survivor_delete_topic: /survivor_delete_id
     base_frame: spot_0/base_link
     target_frame: map
-    # 0.15는 Isaac 캐릭터 첫 detection 잡기에는 좋지만 false positive(벽/박스)도
-    # 많이 생성. 0.35~0.40이 균형점.
+    # 0.35로 유지 — 부분 가림(다리만/상반신만)도 잡아야 함. false positive는
+    # threshold가 아닌 new_survivor_confirmations(아래)로 거름.
     confidence_threshold: 0.35
     device: cuda
     imgsz: 640
@@ -43,9 +43,10 @@ yolo_detector:
     sync_slop_sec: 0.08
     depth_sample_radius_px: 5
     min_depth_m: 0.2
-    # 30m면 spot이 멀리 있는 사람을 depth noise 크게 받음 → 좌표 잘못 잡힘.
-    # 가까이서만 trust해 카메라 시점에 따른 좌표 jump를 줄임.
-    max_depth_m: 8.0
+    # warehouse 천장/뒷벽이 카메라에서 ~15m → 8m로 너무 빡빡하면 사람 bbox 안
+    # 픽셀 상당수가 잘려나가 valid sample <20 (no valid person-depth sample 경고).
+    # 12m면 ~10m까지 사람 인식하면서 멀리 있는 noisy wall은 여전히 차단.
+    max_depth_m: 12.0
     pose_publish_period_sec: 1.0
     project_target_pose_to_ground: true
     optical_to_camera_link: true
@@ -57,8 +58,11 @@ yolo_detector:
     # 3m로 두면 같은 사람 perception noise 흡수, 다른 사람과 구별 가능.
     survivor_match_radius_m: 3.0
     candidate_match_radius_m: 2.0
-    new_survivor_confirmations: 1
-    candidate_ttl_sec: 10.0
+    # 한 번 감지로 survivor 등록하면 false positive 그대로 좌표가 됨. 3번
+    # 연속 검출 요구 → 진짜 사람만 통과 (단발성 오인 차단).
+    new_survivor_confirmations: 3
+    # 후보가 5초 동안 추가 confirmation 못 받으면 폐기 (이전 10s는 노이즈 누적).
+    candidate_ttl_sec: 5.0
     depth_roi_x_min_ratio: 0.30
     depth_roi_x_max_ratio: 0.70
     depth_roi_y_min_ratio: 0.25

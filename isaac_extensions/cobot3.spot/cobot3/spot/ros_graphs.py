@@ -37,7 +37,7 @@ from .constants import (
     SLAM_GRAPH_PATH,
     SPOT_PRIM_PATH,
 )
-from .utils import get_ros_domain_id
+from ..utils import get_ros_domain_id
 
 
 # ─────────────────────────────────────────────
