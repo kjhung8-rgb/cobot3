@@ -8,7 +8,7 @@
 #   5. coverage_path_planner (camera-coverage waypoint exploration)
 #   6. yolo_detector (YOLOv8 RGB-D localization on front camera)
 #   7. survivor_pose_to_marker (PoseStamped -> RViz X; 테스트: ros2 topic pub --once ...)
-#   8. RViz with combined view
+#   8. Optional RViz with combined view
 #
 # Prerequisite: cobot3.spot extension publishing /spot_0/{odom,scan,*_cam/*}.
 
@@ -20,6 +20,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -87,6 +88,7 @@ def generate_launch_description():
     yolo_model = os.path.join(pkg_yolo, "models", "yolov8s.pt")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
+    launch_rviz = LaunchConfiguration("launch_rviz")
 
     return LaunchDescription(
         [
@@ -94,6 +96,11 @@ def generate_launch_description():
                 "use_sim_time",
                 default_value="false",
                 description="Use /clock. Isaac extension publishes system time stamps.",
+            ),
+            DeclareLaunchArgument(
+                "launch_rviz",
+                default_value="false",
+                description="Start the standalone RViz window.",
             ),
             Node(
                 package="cobot_core",
@@ -105,6 +112,12 @@ def generate_launch_description():
                     {"input_scan_topic": "/spot_0/scan"},
                     {"output_scan_topic": "/spot_0/scan_slam"},
                     {"frame_id": "spot_0/lidar_link"},
+                    # Mask jackal's body so SLAM doesn't bake it as a static
+                    # obstacle in /map. Without this, jackal sits inside its
+                    # own inscribed-inflation zone and Nav2 can't plan.
+                    {"mask_frames": ["jackal_0/base_link"]},
+                    {"mask_radius_m": 0.45},
+                    {"mask_max_range_m": 20.0},
                 ],
             ),
             Node(
@@ -117,6 +130,9 @@ def generate_launch_description():
                     {"input_scan_topic": "/spot_0/scan"},
                     {"output_scan_topic": "/spot_0/scan_nav"},
                     {"frame_id": "spot_0/lidar_link"},
+                    {"mask_frames": ["jackal_0/base_link"]},
+                    {"mask_radius_m": 0.45},
+                    {"mask_max_range_m": 20.0},
                 ],
             ),
             TimerAction(
@@ -153,9 +169,11 @@ def generate_launch_description():
                                     "/spot_0/right_cam/camera_info",
                                 ],
                             },
-                            # 4 m: matches waypoint spacing in CPP, faster
-                            # coverage growth, fewer waypoints to visit.
+                            # 4 m camera range. Waypoint spacing is slightly
+                            # wider to reduce total waypoint count.
                             {"max_range_m": 4.0},
+                            {"n_rays": 50},
+                            {"update_rate_hz": 2.0},
                         ],
                     ),
                 ],
@@ -227,20 +245,44 @@ def generate_launch_description():
                         output="screen",
                         parameters=[
                             {"use_sim_time": use_sim_time},
-                            {"waypoint_spacing_m": 4.0},
-                            {"do_spin_at_waypoint": True},
-                            {"spin_duration_sec": 4.0},
-                            {"spin_speed_rad_s": float(speed["default_angular_radps"])},
+                            {"waypoint_spacing_m": 4.5},
+                            {"min_free_component_area_m2": 1.0},
+                            {"goal_clearance_radius_m": 0.35},
+                            # 0.6 → 0.3: spot global_costmap의 inflation_radius=1m
+                            # 때문에 0.35m disk 안 cost=0 cell이 60%까지 안 차서
+                            # 0 waypoints. 30%만 free여도 통과 → waypoint 생성.
+                            {"goal_clearance_min_free_ratio": 0.3},
+                            # waypoint 주변 1m 안에 obstacle cell 없어야 함 —
+                            # 벽/박스 가까이 붙어 이동하지 않도록.
+                            # 0 = disabled. 1.0은 spot global_costmap의 inflation_radius=1m와
+                            # 결합되면 모든 후보가 reject → 0 waypoints. nav2 inflation이
+                            # 이미 obstacle 회피 보장하므로 추가 strict check 불필요.
+                            {"obstacle_clearance_m": 0.0},
+                            {"min_goal_distance_m": 1.0},
+                            {"goal_turn_weight_m_per_rad": 0.8},
+                            {"reachable_seed_radius_m": 1.5},
+                            {"reachable_seed_min_component_cells": 20},
+                            {"reachable_max_cost": 99},
+                            {"do_spin_at_waypoint": False},
+                            {"spin_duration_sec": 11.0},
+                            {"spin_speed_rad_s": 0.6},
                             {"skip_already_seen": True},
+                            # disk 안 seen 비율 ≥ 이 값이면 waypoint skip
+                            # (_replan) + 주행 중 cancel (_maybe_inflight_seen_cancel).
+                            # 0.65: 작은 unseen patches 무시하고 큰 영역만 탐색.
+                            {"seen_skip_min_ratio": 0.65},
                             {"use_start_pose_as_home": True},
                             {"auto_return_enabled": True},
                             {"auto_return_coverage_threshold": 0.95},
                             {"auto_return_hold_sec": 5.0},
-                            # Zone partitioning: 15m × 15m. With 4m
-                            # waypoint spacing each zone has ~12 waypoints
+                            # Zone partitioning: 15m × 15m. With 4.5m
+                            # waypoint spacing each zone has ~9-11 waypoints
                             # → meaningful "stay and finish current area
                             # before moving on" behaviour.
-                            {"zone_size_m": 15.0},
+                            {"zone_size_m": 20.0},
+                            # zone 안 waypoint 중 80% visited면 남은 작은
+                            # 영역은 무시하고 다음 zone으로 강제 advance.
+                            {"zone_advance_visited_ratio": 0.8},
                         ],
                     ),
                 ],
@@ -252,6 +294,7 @@ def generate_launch_description():
                 output="screen",
                 arguments=["-d", rviz_cfg],
                 parameters=[{"use_sim_time": use_sim_time}],
+                condition=IfCondition(launch_rviz),
             ),
         ]
     )

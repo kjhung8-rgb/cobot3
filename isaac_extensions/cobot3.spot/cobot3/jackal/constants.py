@@ -47,7 +47,7 @@ JACKAL_MAX_ANGULAR_SPEED = 2.5  # rad/s
 # LiDAR mounting on /World/Jackal — sensor prim auto-discovered at setup.
 # Hints match common Jackal USD lidar prim names.
 JACKAL_LIDAR_SENSOR_HINTS = ("front_laser", "laser", "lidar", "sick")
-JACKAL_LIDAR_TRANSLATION = (0.0, 0.0, 0.25)
+JACKAL_LIDAR_TRANSLATION = (0.0, 0.0, 0.30)
 JACKAL_LIDAR_TF_ROTATION_XYZW = (0.0, 0.0, 0.0, 1.0)
 
 # OmniGraph paths.

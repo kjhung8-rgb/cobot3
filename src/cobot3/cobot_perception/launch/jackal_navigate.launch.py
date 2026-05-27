@@ -80,20 +80,23 @@ def generate_launch_description():
                 default_value="true",
                 description="Auto-bring lifecycle nodes to active.",
             ),
-            # Spot obstacle publisher: tracks spot_0/base_link via TF, publishes
-            # dual PointCloud2 topics for jackal's costmap obstacle_layer.
+            # Jackal scan sanitizer: spot 본체 위치 (spot_0/base_link)의 ray를
+            # inf로 치환. 그래야 jackal scan-based obstacle_layer가 spot을
+            # obstacle로 안 봄 → 상호 마스킹 (spot이 jackal 안 보는 것의 대칭).
             Node(
-                package="cobot_perception",
-                executable="spot_obstacle_publisher",
-                name="spot_obstacle_publisher",
+                package="cobot_core",
+                executable="scan_sanitizer",
+                name="jackal_nav_scan_sanitizer",
                 output="screen",
                 parameters=[
-                    {"publish_rate_hz": 5.0},
-                    {"mark_radius_m": 0.5},
-                    {"clear_radius_m": 2.0},
-                    {"mark_topic": "/spot_marking_cloud"},
-                    {"clear_topic": "/spot_clearing_cloud"},
-                    {"spot_frame": "spot_0/base_link"},
+                    {"input_scan_topic": "/jackal_0/scan"},
+                    {"output_scan_topic": "/jackal_0/scan_nav"},
+                    {"frame_id": "jackal_0/laser"},
+                    {"mask_frames": ["spot_0/base_link"]},
+                    # 0.6 → 0.3: spot body 일부만 mask. 외곽 LiDAR 반사는
+                    # 통과 → jackal costmap에 spot 외곽선 찍혀 회피 가능.
+                    {"mask_radius_m": 0.3},
+                    {"mask_max_range_m": 20.0},
                 ],
             ),
             Node(
@@ -119,6 +122,12 @@ def generate_launch_description():
                 package="nav2_behaviors",
                 executable="behavior_server",
                 name="behavior_server",
+                # behavior_server의 spin/backup/drive_on_heading/wait recovery
+                # 액션이 모두 cmd_vel을 publish. velocity_smoother까지 합쳐 5
+                # publisher가 동시 spam → Isaac OmniGraph가 silent stall →
+                # jackal cmd_vel 못 받음. recovery는 cmd_vel_recovery로 빼서
+                # Isaac 신호선에서 분리.
+                remappings=[("cmd_vel", "cmd_vel_recovery")],
                 **common_node_kwargs,
             ),
             Node(
@@ -139,9 +148,28 @@ def generate_launch_description():
                 name="velocity_smoother",
                 remappings=[
                     ("cmd_vel", "cmd_vel_nav"),
-                    ("cmd_vel_smoothed", "cmd_vel"),
+                    # nav2 cmd → /jackal_0/cmd_vel_nav_smoothed로. 그 뒤
+                    # cmd_vel_relay가 mode에 따라 /jackal_0/cmd_vel로 게이트.
+                    ("cmd_vel_smoothed", "cmd_vel_nav_smoothed"),
                 ],
                 **common_node_kwargs,
+            ),
+            # cmd_vel_relay: nav vs teleop을 /jackal_0/control_mode 토픽으로 분기.
+            # manual 모드일 때만 /jackal_0/teleop_cmd_vel을 /jackal_0/cmd_vel로
+            # 보냄. autonomous에선 nav2 smoothed 그대로 통과.
+            Node(
+                package="cobot3_navigation",
+                executable="cmd_vel_relay.py",
+                name="jackal_cmd_vel_relay",
+                output="screen",
+                parameters=[
+                    {"enable_person_dampening": False},
+                    {"control_mode_topic": "/jackal_0/control_mode"},
+                    {"teleop_cmd_vel_topic": "/jackal_0/teleop_cmd_vel"},
+                    {"nav_cmd_vel_topic": "/jackal_0/cmd_vel_nav_smoothed"},
+                    {"output_cmd_vel_topic": "/jackal_0/cmd_vel"},
+                    {"default_control_mode": "autonomous"},
+                ],
             ),
             Node(
                 package="nav2_lifecycle_manager",
@@ -164,8 +192,22 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {"input_topic": "/detected_survivor_pose"},
-                    {"nav_action": "/jackal_0/navigate_to_pose"},
+                    # RViz 2D Nav Goal 등 사용자 클릭 좌표 입력 토픽.
+                    {"manual_goal_topic": "/jackal_0/manual_goal"},
+                    # Bool 토픽 (true → home 복귀 트리거).
+                    {"return_home_topic": "/jackal_0/return_home"},
+                    {"resume_topic": "/jackal_0/mission_resume"},
+                    {"rescue_action": "/jackal_0/navigate_to_pose"},
                     {"dedup_distance_m": 0.5},
+                    # 0 = retry 없음. ABORT 즉시 mission_complete → 다음 pending
+                    # 큐로 advance. retry는 lethal 영역에선 효과 없어서 비활성.
+                    {"rescue_max_retries": 0},
+                    {"rescue_retry_step_m": 2.0},
+                    {"robot_base_frame": "jackal_0/base_link"},
+                    {"map_frame": "map"},
+                    # mission 끝나면 jackal이 시작 위치로 자동 복귀.
+                    {"home_return_enabled": True},
+                    {"home_arrival_radius_m": 0.5},
                 ],
             ),
         ]

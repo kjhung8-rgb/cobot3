@@ -53,6 +53,10 @@ def yaw_from_quat(q) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def angle_delta(a: float, b: float) -> float:
+    return math.atan2(math.sin(a - b), math.cos(a - b))
+
+
 class CoveragePathPlanner(Node):
     def __init__(self):
         super().__init__('coverage_path_planner')
@@ -67,6 +71,18 @@ class CoveragePathPlanner(Node):
         self.declare_parameter('return_home_topic', '/coverage_planner/return_home')
 
         self.declare_parameter('waypoint_spacing_m', 2.0)
+        self.declare_parameter('min_free_component_area_m2', 1.0)
+        self.declare_parameter('goal_clearance_radius_m', 0.35)
+        self.declare_parameter('goal_clearance_min_free_ratio', 0.6)
+        # 추가 strict 체크 — waypoint가 costmap의 obstacle(cost>0, inflation
+        # 포함)로부터 이 거리 이상 떨어진 곳에만 생성. 0이면 disabled.
+        # 1.0m 권장 — 벽/박스 근처 waypoint 회피 → 더 안전한 경로.
+        self.declare_parameter('obstacle_clearance_m', 1.0)
+        self.declare_parameter('min_goal_distance_m', 1.0)
+        self.declare_parameter('goal_turn_weight_m_per_rad', 0.8)
+        self.declare_parameter('reachable_seed_radius_m', 1.5)
+        self.declare_parameter('reachable_seed_min_component_cells', 20)
+        self.declare_parameter('reachable_max_cost', 99)
         self.declare_parameter('tick_period_sec', 1.5)
         self.declare_parameter('replan_period_sec', 8.0)
         self.declare_parameter('startup_delay_sec', 8.0)
@@ -84,17 +100,51 @@ class CoveragePathPlanner(Node):
         # complete every waypoint in one zone before moving to the next.
         # Set to <= 0 to disable zoning (use plain nearest-unvisited).
         self.declare_parameter('zone_size_m', 5.0)
+        # 현재 zone 안 waypoint 중 visited 비율이 이 값 이상이면 남은 작은
+        # 미방문 영역은 무시하고 다음 zone으로 강제 advance. 1.0이면 모두 visit
+        # 해야 advance (기존 동작).
+        self.declare_parameter('zone_advance_visited_ratio', 0.8)
 
         # Skip a candidate waypoint if its cell (or a small disk around it)
         # is already camera-seen — no need to revisit.
         self.declare_parameter('skip_already_seen', True)
         self.declare_parameter('seen_skip_radius_m', 0.5)
+        # disk 안 seen(0) cell 비율 ≥ 이 값이면 skip. 1.0이면 100% seen만,
+        # 0.65이면 65%만 seen이어도 skip — 작은 unseen patches 무시.
+        self.declare_parameter('seen_skip_min_ratio', 0.65)
 
         self.declare_parameter('do_spin_at_waypoint', True)
         self.declare_parameter('spin_duration_sec', 4.0)
         self.declare_parameter('spin_speed_rad_s', 1.0)
 
         self._wp_spacing = float(self.get_parameter('waypoint_spacing_m').value)
+        self._min_free_component_area = float(
+            self.get_parameter('min_free_component_area_m2').value
+        )
+        self._obstacle_clearance_m = float(
+            self.get_parameter('obstacle_clearance_m').value
+        )
+        self._goal_clearance_radius = float(
+            self.get_parameter('goal_clearance_radius_m').value
+        )
+        self._goal_clearance_min_free_ratio = float(
+            self.get_parameter('goal_clearance_min_free_ratio').value
+        )
+        self._min_goal_distance = float(
+            self.get_parameter('min_goal_distance_m').value
+        )
+        self._goal_turn_weight = float(
+            self.get_parameter('goal_turn_weight_m_per_rad').value
+        )
+        self._reachable_seed_radius = float(
+            self.get_parameter('reachable_seed_radius_m').value
+        )
+        self._reachable_seed_min_component_cells = int(
+            self.get_parameter('reachable_seed_min_component_cells').value
+        )
+        self._reachable_max_cost = int(
+            self.get_parameter('reachable_max_cost').value
+        )
         self._replan_period = float(self.get_parameter('replan_period_sec').value)
         self._map_frame = self.get_parameter('map_frame').value
         self._robot_frame = self.get_parameter('robot_frame').value
@@ -103,7 +153,11 @@ class CoveragePathPlanner(Node):
         self._spin_speed = float(self.get_parameter('spin_speed_rad_s').value)
         self._skip_seen = bool(self.get_parameter('skip_already_seen').value)
         self._seen_skip_radius = float(self.get_parameter('seen_skip_radius_m').value)
+        self._seen_skip_min_ratio = float(self.get_parameter('seen_skip_min_ratio').value)
         self._zone_size = float(self.get_parameter('zone_size_m').value)
+        self._zone_advance_visited_ratio = float(
+            self.get_parameter('zone_advance_visited_ratio').value
+        )
         self._zone_enabled = self._zone_size > 0.0
         self._current_zone: Optional[Tuple[int, int]] = None
         startup_delay = float(self.get_parameter('startup_delay_sec').value)
@@ -147,6 +201,7 @@ class CoveragePathPlanner(Node):
         self._canceling_for_pause = False
         self._canceling_for_return = False
         self._canceling_return_for_resume = False
+        self._canceling_for_seen = False
         self._return_requested = False
         self._returning_home = False
         self._finished = False
@@ -335,11 +390,21 @@ class CoveragePathPlanner(Node):
         return True
 
     def _get_robot_pose(self) -> Optional[Tuple[float, float]]:
+        pose = self._get_robot_pose_2d()
+        if pose is None:
+            return None
+        return pose[0], pose[1]
+
+    def _get_robot_pose_2d(self) -> Optional[Tuple[float, float, float]]:
         try:
             t = self._tf_buffer.lookup_transform(
                 self._map_frame, self._robot_frame, rclpy.time.Time(),
             )
-            return t.transform.translation.x, t.transform.translation.y
+            return (
+                t.transform.translation.x,
+                t.transform.translation.y,
+                yaw_from_quat(t.transform.rotation),
+            )
         except Exception:
             return None
 
@@ -460,6 +525,30 @@ class CoveragePathPlanner(Node):
 
         arr = np.array(self._costmap.data, dtype=np.int8).reshape((H, W))
         spacing_cells = max(1, int(round(self._wp_spacing / res)))
+        traversable = (arr >= 0) & (arr <= self._reachable_max_cost)
+        component_ids, component_sizes = self._connected_components(traversable)
+        free_component_ids, free_component_sizes = self._free_components(arr)
+        min_free_component_cells = max(
+            1, int(math.ceil(self._min_free_component_area / (res * res)))
+        )
+        clearance_cells = max(
+            0, int(math.ceil(self._goal_clearance_radius / res))
+        )
+        obstacle_clearance_cells = max(
+            0, int(math.ceil(self._obstacle_clearance_m / res))
+        )
+        reachable_component = self._reachable_component_id(
+            component_ids, component_sizes, ox, oy, res,
+        )
+        if reachable_component is None:
+            self._waypoints = {}
+            self.get_logger().warn(
+                'replan skipped: no reachable traversable costmap component near robot'
+            )
+            self._publish_zone_viz()
+            self._publish_waypoint_viz()
+            return
+        reachable_size = component_sizes.get(reachable_component, 0)
 
         # Optional camera-seen check — skip waypoint if its surrounding disk
         # in /camera_coverage is already seen.
@@ -477,11 +566,14 @@ class CoveragePathPlanner(Node):
                 seen_r_cells = max(1, int(round(self._seen_skip_radius / res)))
 
         new_wps: Dict[WaypointKey, Dict] = {}
+        skipped_small_component = 0
+        skipped_clearance = 0
+        skipped_disconnected = 0
         skipped_seen = 0
         # For each ``spacing_cells × spacing_cells`` window of the grid, find
-        # the FREE costmap cell closest to the window centre and put one
-        # waypoint there. Plain grid sampling missed almost every cell
-        # because at this stage FREE is < 1 % of the costmap.
+        # a reachable, stable FREE costmap cell closest to the window centre.
+        # The traversable component prevents goals across walls; the FREE
+        # component and local clearance checks reject tiny islands/pockets.
         half = spacing_cells // 2
         for win_gy in range(half, H, spacing_cells):
             for win_gx in range(half, W, spacing_cells):
@@ -493,8 +585,43 @@ class CoveragePathPlanner(Node):
                 free_local_ys, free_local_xs = np.where(sub == 0)
                 if len(free_local_ys) == 0:
                     continue
-                free_ys = free_local_ys + y0
-                free_xs = free_local_xs + x0
+                component_sub = component_ids[y0:y1, x0:x1]
+                reachable_local_ys, reachable_local_xs = np.where(
+                    (sub == 0) & (component_sub == reachable_component)
+                )
+                if len(reachable_local_ys) == 0:
+                    skipped_disconnected += 1
+                    continue
+                candidate_ys = reachable_local_ys + y0
+                candidate_xs = reachable_local_xs + x0
+
+                large_component_indices = []
+                for idx, (gy, gx) in enumerate(zip(candidate_ys, candidate_xs)):
+                    free_component_id = int(free_component_ids[gy, gx])
+                    if (free_component_id > 0
+                            and free_component_sizes.get(free_component_id, 0)
+                            >= min_free_component_cells):
+                        large_component_indices.append(idx)
+                if not large_component_indices:
+                    skipped_small_component += 1
+                    continue
+
+                clearance_indices = []
+                for idx in large_component_indices:
+                    gy = int(candidate_ys[idx])
+                    gx = int(candidate_xs[idx])
+                    if not self._has_goal_clearance(arr, gx, gy, clearance_cells):
+                        continue
+                    # Strict obstacle clearance — 벽/박스로부터 충분히 떨어져야.
+                    if not self._has_obstacle_clearance(arr, gx, gy, obstacle_clearance_cells):
+                        continue
+                    clearance_indices.append(idx)
+                if not clearance_indices:
+                    skipped_clearance += 1
+                    continue
+
+                free_ys = candidate_ys[clearance_indices]
+                free_xs = candidate_xs[clearance_indices]
                 # Pick FREE cell closest to window centre
                 d2 = (free_ys - win_gy) ** 2 + (free_xs - win_gx) ** 2
                 idx = int(np.argmin(d2))
@@ -509,7 +636,7 @@ class CoveragePathPlanner(Node):
                     cov_sub = cov_arr[sy0:sy1, sx0:sx1]
                     if cov_sub.size > 0:
                         seen_ratio = (cov_sub == 0).sum() / cov_sub.size
-                        if seen_ratio >= 0.8:
+                        if seen_ratio >= self._seen_skip_min_ratio:
                             skipped_seen += 1
                             continue
                 key: WaypointKey = (gx, gy)
@@ -527,28 +654,168 @@ class CoveragePathPlanner(Node):
         visited_count = sum(1 for w in new_wps.values() if w['visited'])
         self.get_logger().info(
             f'replan: {len(new_wps)} waypoints (+{added} new, -{removed} dropped, '
-            f'{skipped_seen} skipped already-seen), {visited_count} visited'
+            f'{skipped_small_component} skipped small-free-area, '
+            f'{skipped_clearance} skipped low-clearance, '
+            f'{skipped_disconnected} skipped disconnected-free-island, '
+            f'{skipped_seen} skipped already-seen), {visited_count} visited, '
+            f'reachable component {reachable_component} size={reachable_size}'
         )
         self._publish_zone_viz()
         self._publish_waypoint_viz()
 
-    def _pick_next_waypoint(self) -> Optional[WaypointKey]:
-        """If zoning is on: finish current zone before moving on. Otherwise
-        plain greedy nearest unvisited."""
+    def _free_components(self, arr: np.ndarray) -> Tuple[np.ndarray, Dict[int, int]]:
+        """Label connected FREE_SPACE regions so tiny pockets can be ignored."""
+        return self._connected_components(arr == 0)
+
+    def _connected_components(self, mask: np.ndarray) -> Tuple[np.ndarray, Dict[int, int]]:
+        """Label connected traversable regions in a boolean grid."""
+        H, W = mask.shape
+        labels = np.zeros((H, W), dtype=np.int32)
+        sizes: Dict[int, int] = {}
+        component_id = 0
+
+        for start_y, start_x in zip(*np.where(mask & (labels == 0))):
+            if labels[start_y, start_x] != 0:
+                continue
+            component_id += 1
+            stack = [(int(start_x), int(start_y))]
+            labels[start_y, start_x] = component_id
+            size = 0
+            while stack:
+                x, y = stack.pop()
+                size += 1
+                for nx, ny in (
+                    (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1),
+                    (x + 1, y + 1), (x + 1, y - 1),
+                    (x - 1, y + 1), (x - 1, y - 1),
+                ):
+                    if nx < 0 or nx >= W or ny < 0 or ny >= H:
+                        continue
+                    if not mask[ny, nx] or labels[ny, nx] != 0:
+                        continue
+                    labels[ny, nx] = component_id
+                    stack.append((nx, ny))
+            sizes[component_id] = size
+
+        return labels, sizes
+
+    def _reachable_component_id(
+        self,
+        component_ids: np.ndarray,
+        component_sizes: Dict[int, int],
+        ox: float,
+        oy: float,
+        res: float,
+    ) -> Optional[int]:
         pose = self._get_robot_pose()
         if pose is None:
             return None
+
+        H, W = component_ids.shape
         rx, ry = pose
+        rgx = int(math.floor((rx - ox) / res))
+        rgy = int(math.floor((ry - oy) / res))
+        if not (0 <= rgx < W and 0 <= rgy < H):
+            return None
+
+        component_id = int(component_ids[rgy, rgx])
+        if (component_id > 0
+                and component_sizes.get(component_id, 0)
+                >= self._reachable_seed_min_component_cells):
+            return component_id
+
+        radius_cells = max(1, int(math.ceil(self._reachable_seed_radius / res)))
+        y0 = max(0, rgy - radius_cells)
+        y1 = min(H, rgy + radius_cells + 1)
+        x0 = max(0, rgx - radius_cells)
+        x1 = min(W, rgx + radius_cells + 1)
+
+        sub = component_ids[y0:y1, x0:x1]
+        local_ys, local_xs = np.where(sub > 0)
+        if len(local_ys) == 0:
+            return None
+
+        ys = local_ys + y0
+        xs = local_xs + x0
+        d2 = (ys - rgy) ** 2 + (xs - rgx) ** 2
+        in_radius = d2 <= radius_cells * radius_cells
+        if not np.any(in_radius):
+            return None
+
+        candidate_ids = {
+            int(component_ids[ys[i], xs[i]])
+            for i in np.where(in_radius)[0]
+        }
+        candidate_ids.discard(0)
+        if not candidate_ids:
+            return None
+
+        return max(candidate_ids, key=lambda cid: component_sizes.get(cid, 0))
+
+    def _has_goal_clearance(
+        self, arr: np.ndarray, gx: int, gy: int, radius_cells: int
+    ) -> bool:
+        if radius_cells <= 0:
+            return True
+        H, W = arr.shape
+        y0 = max(0, gy - radius_cells)
+        y1 = min(H, gy + radius_cells + 1)
+        x0 = max(0, gx - radius_cells)
+        x1 = min(W, gx + radius_cells + 1)
+        if y0 >= y1 or x0 >= x1:
+            return False
+
+        sub = arr[y0:y1, x0:x1]
+        yy, xx = np.ogrid[y0 - gy:y1 - gy, x0 - gx:x1 - gx]
+        disk = (xx * xx + yy * yy) <= radius_cells * radius_cells
+        if not np.any(disk):
+            return False
+        free_ratio = np.count_nonzero(sub[disk] == 0) / np.count_nonzero(disk)
+        return bool(free_ratio >= self._goal_clearance_min_free_ratio)
+
+    def _has_obstacle_clearance(
+        self, arr: np.ndarray, gx: int, gy: int, radius_cells: int
+    ) -> bool:
+        """waypoint 주변 radius_cells 안에 obstacle (cost > 0) cell이 하나라도
+        있으면 False. costmap의 inflation 영역도 포함되므로 벽/박스로부터
+        실효 거리 확보.
+        """
+        if radius_cells <= 0:
+            return True
+        H, W = arr.shape
+        y0 = max(0, gy - radius_cells)
+        y1 = min(H, gy + radius_cells + 1)
+        x0 = max(0, gx - radius_cells)
+        x1 = min(W, gx + radius_cells + 1)
+        if y0 >= y1 or x0 >= x1:
+            return False
+
+        sub = arr[y0:y1, x0:x1]
+        yy, xx = np.ogrid[y0 - gy:y1 - gy, x0 - gx:x1 - gx]
+        disk = (xx * xx + yy * yy) <= radius_cells * radius_cells
+        # obstacle (cost > 0) cell이 disk 내에 있는지 — unknown(-1)은 무시.
+        obstacle_in_disk = np.any((sub[disk] > 0))
+        return not bool(obstacle_in_disk)
+
+    def _pick_next_waypoint(self) -> Optional[WaypointKey]:
+        """If zoning is on: finish current zone before moving on. Otherwise
+        prefer nearby unvisited waypoints that do not require a hard turn."""
+        pose = self._get_robot_pose_2d()
+        if pose is None:
+            return None
+        rx, ry, robot_yaw = pose
 
         if not self._zone_enabled:
-            best_key = None
-            best_dist = float('inf')
+            best_key, best_score = None, float('inf')
             for key, wp in self._waypoints.items():
                 if wp['visited']:
                     continue
-                d = math.hypot(wp['x'] - rx, wp['y'] - ry)
-                if d < best_dist:
-                    best_dist = d
+                score = self._score_waypoint(wp, rx, ry, robot_yaw)
+                if score is None:
+                    wp['visited'] = True
+                    continue
+                if score < best_score:
+                    best_score = score
                     best_key = key
             return best_key
 
@@ -557,17 +824,36 @@ class CoveragePathPlanner(Node):
             self._current_zone = self._zone_for_pose(rx, ry)
             self.get_logger().info(f'starting zone {self._current_zone}')
 
-        # Try to pick nearest unvisited within current zone
-        best_key, best_dist = None, float('inf')
-        for key, wp in self._waypoints.items():
-            if wp['visited'] or wp['zone'] != self._current_zone:
-                continue
-            d = math.hypot(wp['x'] - rx, wp['y'] - ry)
-            if d < best_dist:
-                best_dist = d
-                best_key = key
-        if best_key is not None:
-            return best_key
+        # 현재 zone visited 비율 체크 — threshold 이상이면 남은 작은 영역은
+        # 무시하고 다음 zone으로 advance.
+        if self._zone_advance_visited_ratio < 1.0:
+            zone_wps = [w for w in self._waypoints.values()
+                        if w['zone'] == self._current_zone]
+            if zone_wps:
+                visited_n = sum(1 for w in zone_wps if w['visited'])
+                ratio = visited_n / len(zone_wps)
+                if ratio >= self._zone_advance_visited_ratio:
+                    self.get_logger().info(
+                        f'zone {self._current_zone} {ratio:.0%} visited '
+                        f'(≥{self._zone_advance_visited_ratio:.0%}) — '
+                        f'forcing advance, marking {len(zone_wps) - visited_n} '
+                        f'remaining as visited'
+                    )
+                    for w in zone_wps:
+                        if not w['visited']:
+                            w['visited'] = True
+                    # Fall through to "next zone" advance logic below.
+                    best_key = None
+                else:
+                    best_key = self._best_in_current_zone(rx, ry, robot_yaw)
+                    if best_key is not None:
+                        return best_key
+            else:
+                best_key = None
+        else:
+            best_key = self._best_in_current_zone(rx, ry, robot_yaw)
+            if best_key is not None:
+                return best_key
 
         # Current zone is done — advance to nearest unvisited zone
         unvisited_zones = {wp['zone'] for wp in self._waypoints.values()
@@ -588,14 +874,45 @@ class CoveragePathPlanner(Node):
         self._current_zone = new_zone
 
         # Now find waypoint in the new zone
+        best_key, best_score = None, float('inf')
         for key, wp in self._waypoints.items():
             if wp['visited'] or wp['zone'] != self._current_zone:
                 continue
-            d = math.hypot(wp['x'] - rx, wp['y'] - ry)
-            if d < best_dist:
-                best_dist = d
+            score = self._score_waypoint(wp, rx, ry, robot_yaw)
+            if score is None:
+                wp['visited'] = True
+                continue
+            if score < best_score:
+                best_score = score
                 best_key = key
         return best_key
+
+    def _best_in_current_zone(self, rx: float, ry: float, robot_yaw: float) -> Optional[WaypointKey]:
+        """현재 zone 안 unvisited waypoint 중 best score 픽. 없으면 None."""
+        best_key, best_score = None, float('inf')
+        for key, wp in self._waypoints.items():
+            if wp['visited'] or wp['zone'] != self._current_zone:
+                continue
+            score = self._score_waypoint(wp, rx, ry, robot_yaw)
+            if score is None:
+                wp['visited'] = True
+                continue
+            if score < best_score:
+                best_score = score
+                best_key = key
+        return best_key
+
+    def _score_waypoint(
+        self, wp: Dict, rx: float, ry: float, robot_yaw: float
+    ) -> Optional[float]:
+        dx = wp['x'] - rx
+        dy = wp['y'] - ry
+        dist = math.hypot(dx, dy)
+        if dist < self._min_goal_distance:
+            return None
+        heading = math.atan2(dy, dx)
+        turn = abs(angle_delta(heading, robot_yaw))
+        return dist + self._goal_turn_weight * turn
 
     # ------------------------------------------------------------------ #
 
@@ -621,6 +938,10 @@ class CoveragePathPlanner(Node):
                 or time.time() - self._last_replan_ts > self._replan_period):
             self._replan()
             self._last_replan_ts = time.time()
+
+        # 주행 중 현재 waypoint 주변이 이미 covered면 도착 안 기다리고
+        # 취소하고 다음 goal pick — abort/recovery 사이클 회피.
+        self._maybe_inflight_seen_cancel()
 
         if self._busy:
             return
@@ -659,10 +980,15 @@ class CoveragePathPlanner(Node):
         # forward) instead of backing up. Without this Nav2/MPPI under
         # "Omni" motion_model often picks reverse motion as shorter when
         # the waypoint is behind the robot.
-        pose = self._get_robot_pose()
+        pose = self._get_robot_pose_2d()
         if pose is not None:
-            rx, ry = pose
-            yaw = math.atan2(wy - ry, wx - rx)
+            rx, ry, robot_yaw = pose
+            dist = math.hypot(wx - rx, wy - ry)
+            yaw = (
+                robot_yaw
+                if dist < self._min_goal_distance
+                else math.atan2(wy - ry, wx - rx)
+            )
             goal_msg.pose.pose.orientation.x = 0.0
             goal_msg.pose.pose.orientation.y = 0.0
             goal_msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
@@ -801,6 +1127,12 @@ class CoveragePathPlanner(Node):
             self._publish_stop()
             return
 
+        # 주행 중 covered 감지로 취소한 경우 — visited 처리해서 다시 안 뽑힘.
+        # spin은 무의미 (영역 이미 본 상태).
+        if self._canceling_for_seen:
+            self._release_current_goal(mark_visited=True)
+            return
+
         # Either way, mark visited so we don't pick it forever. SUCCESS:
         # great. ABORTED: unreachable, skip. CANCELED: shouldn't happen
         # here but treat same.
@@ -828,6 +1160,70 @@ class CoveragePathPlanner(Node):
         if self._current_wp_key is not None and self._current_wp_key in self._waypoints:
             self._waypoints[self._current_wp_key]['visited'] = True
 
+    def _maybe_inflight_seen_cancel(self):
+        """현재 waypoint 주변 disk의 seen 비율이 seen_skip_min_ratio 이상이면
+        nav goal 취소.
+
+        Goal에 도달 못해도 그 영역이 이미 카메라로 충분히 매핑됐으면 의미 없음
+        → nav2 abort/recovery 사이클 (40s+) 회피하고 다음 waypoint로 빨리 advance.
+        _replan과 동일 ratio threshold로 일관성.
+        """
+        if not self._skip_seen:
+            return
+        if not self._busy or self._current_goal_kind != 'waypoint':
+            return
+        if self._nav_goal_handle is None or self._canceling_for_seen:
+            return
+        if self._coverage is None or self._current_wp_key is None:
+            return
+        wp = self._waypoints.get(self._current_wp_key)
+        if wp is None:
+            return
+
+        ci = self._coverage.info
+        if ci.width == 0 or ci.height == 0 or ci.resolution <= 0:
+            return
+        cx = int((wp['x'] - ci.origin.position.x) / ci.resolution)
+        cy = int((wp['y'] - ci.origin.position.y) / ci.resolution)
+        r_cells = max(1, int(round(self._seen_skip_radius / ci.resolution)))
+
+        # disk 내 cell 카운트 — seen(0) 비율 계산
+        W, H = ci.width, ci.height
+        data = self._coverage.data
+        total = 0
+        seen = 0
+        r2 = r_cells * r_cells
+        for dy in range(-r_cells, r_cells + 1):
+            py = cy + dy
+            if not (0 <= py < H):
+                continue
+            for dx in range(-r_cells, r_cells + 1):
+                if dx * dx + dy * dy > r2:
+                    continue
+                px = cx + dx
+                if not (0 <= px < W):
+                    continue
+                total += 1
+                if data[py * W + px] == 0:
+                    seen += 1
+        if total == 0:
+            return
+        seen_ratio = seen / total
+        if seen_ratio < self._seen_skip_min_ratio:
+            return
+
+        self.get_logger().info(
+            f'   inflight-seen: wp ({wp["x"]:+.2f}, {wp["y"]:+.2f}) {seen_ratio:.0%} covered '
+            f'(≥{self._seen_skip_min_ratio:.0%}) — cancel & advance'
+        )
+        self._canceling_for_seen = True
+        try:
+            self._nav_goal_handle.cancel_goal_async()
+        except Exception as exc:
+            self.get_logger().warn(f'failed to cancel goal for in-flight seen: {exc}')
+            self._canceling_for_seen = False
+            self._release_current_goal(mark_visited=True)
+
     def _release_current_goal(self, mark_visited: bool):
         if mark_visited:
             self._mark_visited()
@@ -836,6 +1232,7 @@ class CoveragePathPlanner(Node):
         self._spinning = False
         self._busy = False
         self._current_goal_kind = None
+        self._canceling_for_seen = False
 
     # ------------------------------------------------------------------ #
 
@@ -917,7 +1314,7 @@ class CoveragePathPlanner(Node):
             outline.type = Marker.LINE_STRIP
             outline.action = Marker.ADD
             outline.pose.orientation.w = 1.0
-            outline.scale.x = 0.1  # line thickness
+            outline.scale.x = 0.4 if is_current else 0.1  # line thickness
             outline.color = c
             outline.points = [
                 _pt(x0, y0), _pt(x1, y0), _pt(x1, y1), _pt(x0, y1), _pt(x0, y0),
