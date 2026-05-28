@@ -8,8 +8,8 @@ Thin UI entrypoint. Heavy logic is split into:
   - teleop_launcher.py  : terminal launcher for spot_teleop.py
   - constants.py        : /spot_0 topic/frame contract
 
-Optional secondary robots (Carter, Jackal) are isolated in spot/carter/ and
-spot/jackal/ subpackages. Each contributes its own UI block via the three
+Optional secondary robots (Carter, Jackal) are isolated in cobot3/carter/ and
+cobot3/jackal/ subpackages. Each contributes its own UI block via the three
 ``build_*`` helpers in its panel.py. To drop one direction, delete the
 subpackage folder and remove the two-line panel imports + the three
 ``build_*`` calls below.

@@ -51,7 +51,7 @@ class CameraCoverageTracker(Node):
         self.declare_parameter('camera_info_topic', '/spot_0/front_cam/camera_info')
         self.declare_parameter('camera_info_topics', ['/spot_0/front_cam/camera_info'])
         self.declare_parameter('horizontal_fov_deg', 70.0)
-        self.declare_parameter('max_range_m', 6.0)
+        self.declare_parameter('max_range_m', 8.0)
         self.declare_parameter('n_rays', 80)
         self.declare_parameter('update_rate_hz', 5.0)
         # ── NEW ARCH ──

@@ -18,11 +18,11 @@ JACKAL_LIDAR_FRAME = f"{JACKAL_NS}/laser"
 # chassis under a different name (base_link vs chassis_link).
 JACKAL_PRIM_PATH = "/World/Jackal"
 JACKAL_CHASSIS_PRIM_PATH = f"{JACKAL_PRIM_PATH}/base_link"
-# TODO(verify): browser-confirm the actual Nucleus path in your Isaac Sim
-# install. Common locations seen in the wild:
-#   /Isaac/Robots/Clearpath/Jackal/jackal.usd
-#   /Isaac/Robots/Clearpath/Jackal/Jackal.usd
-JACKAL_USD_NUCLEUS_PATH = "/Isaac/Robots/Clearpath/Jackal/jackal.usd"
+# TODO(verify): browser-confirm the actual asset path in your Isaac Sim
+# install. Common paths seen in the wild, relative to Isaac's assets root:
+#   Isaac/Robots/Clearpath/Jackal/jackal.usd
+#   Isaac/Robots/Clearpath/Jackal/Jackal.usd
+JACKAL_USD_ASSET_REL_PATH = "Isaac/Robots/Clearpath/Jackal/jackal.usd"
 JACKAL_SPAWN_POSITION = (24.0, 29.0, 0.2)
 JACKAL_SPAWN_YAW_DEG = 0.0
 
@@ -54,3 +54,25 @@ JACKAL_LIDAR_TF_ROTATION_XYZW = (0.0, 0.0, 0.0, 1.0)
 JACKAL_CMD_VEL_GRAPH_PATH = "/World/Jackal_CmdVel_Graph"
 JACKAL_ODOM_TF_GRAPH_PATH = "/World/Jackal_OdomTf_Graph"
 JACKAL_SCAN_TF_GRAPH_PATH = "/World/Jackal_ScanTf_Graph"
+
+# ─────────────────────────────────────────────
+# Headlight (mirror of spot's pattern — SphereLight + ShapingAPI cone parented
+# under jackal chassis so it follows motion). Translation/rotation defaults are
+# sensible starting points; tune in Isaac UI then copy back here.
+# ─────────────────────────────────────────────
+JACKAL_HEADLIGHT_PRIM_PATH = f"{JACKAL_CHASSIS_PRIM_PATH}/headlight"
+JACKAL_HEADLIGHT_TRANSLATION = (0.25, 0.0, 0.25)              # 사용자 Isaac UI 튜닝값 고정
+JACKAL_HEADLIGHT_ROTATION_XYZ_DEG = (-0.06097, 90.94314, -0.06097)  # 사용자 튜닝
+JACKAL_HEADLIGHT_SCALE = (0.95094, 5.26113, 3.36257)          # 사용자 튜닝 — Y/Z 늘려 시야 확장
+JACKAL_HEADLIGHT_INTENSITY = 500000.0               # 1.5M → 500k (사용자 피드백: 너무 밝음)
+JACKAL_HEADLIGHT_RADIUS = 0.08                      # jackal 작아서 emitter도 작게
+JACKAL_HEADLIGHT_CONE_ANGLE_DEG = 30.0              # cone 미적용 (omni 모드) — 보존만
+JACKAL_HEADLIGHT_COLOR_RGB = (1.0, 1.0, 0.92)       # warm white
+
+# Rescue box: jackal 위에 얹는 빨간 상자 (visual only).
+JACKAL_RESCUE_BOX_PATH = f"{JACKAL_CHASSIS_PRIM_PATH}/rescue_box"
+JACKAL_RESCUE_BOX_TRANSLATION = (0.0, 0.0, 0.20)
+JACKAL_RESCUE_BOX_ROTATION_XYZ_DEG = (0.0, 0.0, 0.0)
+# Cube default size=2 — scale의 절반이 실제 dimension. 0.3 x 0.25 x 0.15 m 상자.
+JACKAL_RESCUE_BOX_SCALE = (0.15, 0.125, 0.075)
+JACKAL_RESCUE_BOX_COLOR_RGB = (0.9, 0.05, 0.05)     # 빨강

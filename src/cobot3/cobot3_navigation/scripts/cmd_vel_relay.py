@@ -26,6 +26,8 @@ class CmdVelRelay(Node):
         self.declare_parameter("dampening_hold_sec", 2.0)
         self.declare_parameter("control_mode_topic", "/control_mode")
         self.declare_parameter("teleop_cmd_vel_topic", "/teleop_cmd_vel")
+        self.declare_parameter("nav_cmd_vel_topic", "/cmd_vel")
+        self.declare_parameter("output_cmd_vel_topic", "/spot_0/cmd_vel")
         self.declare_parameter("default_control_mode", "autonomous")
 
         self._enable_dampen = self.get_parameter("enable_person_dampening").value
@@ -39,8 +41,10 @@ class CmdVelRelay(Node):
             )
             self._mode = "autonomous"
 
-        self._pub = self.create_publisher(Twist, "/spot_0/cmd_vel", 10)
-        self._nav_sub = self.create_subscription(Twist, "/cmd_vel", self._on_nav_cmd, 10)
+        output_topic = self.get_parameter("output_cmd_vel_topic").value
+        nav_topic = self.get_parameter("nav_cmd_vel_topic").value
+        self._pub = self.create_publisher(Twist, output_topic, 10)
+        self._nav_sub = self.create_subscription(Twist, nav_topic, self._on_nav_cmd, 10)
         self._teleop_sub = self.create_subscription(
             Twist,
             self.get_parameter("teleop_cmd_vel_topic").value,
@@ -60,12 +64,14 @@ class CmdVelRelay(Node):
                 Bool, slowdown_topic, self._on_detect, 10
             )
             self.get_logger().info(
-                f"Relaying gated cmd_vel -> /spot_0/cmd_vel "
+                f"Relaying gated cmd_vel {nav_topic} -> {output_topic} "
                 f"(dampening x{self._factor:.2f} for {self._hold_sec:.1f}s "
                 f"after slowdown request on {slowdown_topic})"
             )
         else:
-            self.get_logger().info("Relaying gated cmd_vel -> /spot_0/cmd_vel")
+            self.get_logger().info(
+                f"Relaying gated cmd_vel {nav_topic} -> {output_topic}"
+            )
         self.get_logger().info(f"Initial control mode: {self._mode}")
 
     def _on_detect(self, msg: Bool):

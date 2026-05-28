@@ -20,7 +20,7 @@ from .constants import (
     CARTER_PRIM_PATH,
     CARTER_SPAWN_POSITION,
     CARTER_SPAWN_YAW_DEG,
-    CARTER_USD_NUCLEUS_PATH,
+    CARTER_USD_ASSET_REL_PATH,
 )
 
 
@@ -36,7 +36,7 @@ def add_carter_to_world(sample):
         carb.log_error("[cobot3.spot/carter] co-spawn: Isaac assets root 못 찾음")
         return
 
-    carter_usd = assets_root_path + CARTER_USD_NUCLEUS_PATH
+    carter_usd = f"{assets_root_path.rstrip('/')}/{CARTER_USD_ASSET_REL_PATH}"
     add_reference_to_stage(usd_path=carter_usd, prim_path=CARTER_PRIM_PATH)
 
     sample.carter = SingleArticulation(

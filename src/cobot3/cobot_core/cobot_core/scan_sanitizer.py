@@ -5,6 +5,13 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
+from tf2_ros import (
+    Buffer,
+    ConnectivityException,
+    ExtrapolationException,
+    LookupException,
+)
+from tf2_ros.transform_listener import TransformListener
 
 
 class ScanSanitizer(Node):
@@ -16,8 +23,30 @@ class ScanSanitizer(Node):
         self.declare_parameter("frame_id", "anymalc_0/lidar_link")
         self.declare_parameter("min_range_epsilon", 0.01)
 
+        # Multi-robot self-obstacle masking: rays whose endpoint hits any TF
+        # frame in `mask_frames` (within mask_radius) are set to +inf so the
+        # downstream SLAM/nav consumer treats them as free-space observations
+        # instead of marking the other robot's body as a static obstacle.
+        # Empty list = pass-through (original behavior).
+        self.declare_parameter("mask_frames", [""])
+        self.declare_parameter("mask_radius_m", 0.45)
+        self.declare_parameter("mask_max_range_m", 6.0)
+
         input_topic = self.get_parameter("input_scan_topic").value
         output_topic = self.get_parameter("output_scan_topic").value
+
+        raw = self.get_parameter("mask_frames").value
+        self._mask_frames = [f for f in (raw or []) if f]
+        self._mask_radius = float(self.get_parameter("mask_radius_m").value)
+        self._mask_max_range = float(self.get_parameter("mask_max_range_m").value)
+
+        if self._mask_frames:
+            self._tf_buffer = Buffer()
+            self._tf_listener = TransformListener(self._tf_buffer, self)
+            self.get_logger().info(
+                f"ScanSanitizer: masking {self._mask_frames} "
+                f"(r={self._mask_radius:.2f}m, max={self._mask_max_range:.1f}m)"
+            )
 
         self.pub = self.create_publisher(LaserScan, output_topic, 10)
         self.sub = self.create_subscription(
@@ -66,6 +95,9 @@ class ScanSanitizer(Node):
             else:
                 clean.append(float(r))
 
+        if self._mask_frames:
+            self._apply_mask(out, clean)
+
         out.ranges = clean
 
         if msg.intensities and len(msg.intensities) == n:
@@ -74,6 +106,45 @@ class ScanSanitizer(Node):
             out.intensities = []
 
         self.pub.publish(out)
+
+    def _apply_mask(self, out: LaserScan, clean: list) -> None:
+        # Use latest available TF (rclpy.time.Time()) rather than the scan
+        # stamp — Isaac stamps may briefly lead/lag /tf and we'd rather use a
+        # slightly stale TF than no mask at all.
+        scan_frame = out.header.frame_id
+        n = len(clean)
+        a_min = out.angle_min
+        a_inc = out.angle_increment
+        latest = rclpy.time.Time()
+        for target in self._mask_frames:
+            try:
+                tf = self._tf_buffer.lookup_transform(scan_frame, target, latest)
+            except (LookupException, ConnectivityException, ExtrapolationException):
+                continue
+            tx = tf.transform.translation.x
+            ty = tf.transform.translation.y
+            d = math.hypot(tx, ty)
+            if d < 1e-3 or d > self._mask_max_range:
+                continue
+            angle_to = math.atan2(ty, tx)
+            if self._mask_radius >= d:
+                half_w = math.pi
+            else:
+                # +5° margin to cover footprint rotation and TF jitter.
+                half_w = math.asin(self._mask_radius / d) + math.radians(5.0)
+            # Mask any ray within the angular cone around the target. Don't
+            # mask rays whose measured range is much shorter than d — those
+            # hit something closer than the masked robot and are real.
+            d_keep_below = max(0.0, d - self._mask_radius - 0.1)
+            for i in range(n):
+                ang = a_min + i * a_inc
+                diff = (ang - angle_to + math.pi) % (2.0 * math.pi) - math.pi
+                if abs(diff) > half_w:
+                    continue
+                r = clean[i]
+                if r < d_keep_below:
+                    continue
+                clean[i] = float("inf")
 
 
 def main(args=None):

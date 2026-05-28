@@ -15,7 +15,10 @@ keywords = ["isaac sim", "spot", "cobot3", "rescue"]
 "isaacsim.core.nodes" = {}
 "isaacsim.ros2.bridge" = {}
 "isaacsim.sensors.rtx" = {}
+"isaacsim.sensors.physx" = {}
+"isaacsim.storage.native" = {}
 "isaacsim.robot.policy.examples" = {}
+"isaacsim.robot.wheeled_robots" = {}
 "isaacsim.examples.interactive" = {}
 
 [[python.module]]

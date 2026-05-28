@@ -32,6 +32,7 @@ from .ros_graphs import (
     disable_jackal_lidar_viz,
     setup_jackal_cmd_vel_graph,
     setup_jackal_odom_tf_graph,
+    setup_jackal_scan_tf_graph,
 )
 from .scene import add_jackal_to_world
 
@@ -43,17 +44,17 @@ def build_jackal_load_button(ext):
 
 
 def _setup_jackal_all():
-    """One click: cmd_vel + odom/TF OmniGraphs + LiDAR viewport viz off.
+    """One click: cmd_vel + odom/TF + scan/TF OmniGraphs + viewport viz off.
 
-    No LiDAR scan/TF graph — jackal uses spot's SLAM map for nav and spot's
-    position (via spot_obstacle_publisher) as a dynamic obstacle. We still
-    turn off the lidar's viewport ray rendering since the USD enables it
-    by default.
+    Scan graph는 jackal local_costmap obstacle_layer가 /jackal_0/scan을
+    사용하기 위해 활성화. spot이 마스킹한 /map static_layer 외에 jackal
+    자기 lidar로 실시간 obstacle 감지해 충돌 회피.
     """
     setup_jackal_cmd_vel_graph()
     setup_jackal_odom_tf_graph()
+    setup_jackal_scan_tf_graph()
     disable_jackal_lidar_viz()
-    print("[cobot3.spot/jackal] ✅ Jackal ROS graphs all set up")
+    print("[cobot3.spot/jackal] ✅ Jackal ROS graphs all set up (cmd_vel + odom + scan)")
 
 
 def build_jackal_panel(ext):  # noqa: ARG001 — keep signature symmetric with build_jackal_load_button

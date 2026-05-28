@@ -78,7 +78,7 @@ class SurvivorDetector(Node):
         self.declare_parameter("base_pose_topic", "/spot_0/yolo/person_pose_base")
         self.declare_parameter("survivor_pose_topic", "/detected_survivor_pose")
         self.declare_parameter("survivor_delete_topic", "/survivor_delete_id")
-        self.declare_parameter("confidence_threshold", 0.4)
+        self.declare_parameter("confidence_threshold", 0.65)
         self.declare_parameter("device", "cuda")
         self.declare_parameter("imgsz", 640)
         self.declare_parameter("inference_period_sec", 0.1)

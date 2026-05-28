@@ -322,6 +322,10 @@ def setup_jackal_scan_tf_graph():
                     ("ReadLidar.outputs:horizontalFov", "PublishScan.inputs:horizontalFov"),
                     ("ReadLidar.outputs:horizontalResolution", "PublishScan.inputs:horizontalResolution"),
                     ("ReadLidar.outputs:linearDepthData", "PublishScan.inputs:linearDepthData"),
+                    # PublishScan은 intensities size == linearDepth size 검증 →
+                    # 안 연결하면 empty(0) vs N 불일치로 에러. ReadLidar의 intensities
+                    # 그대로 forward.
+                    ("ReadLidar.outputs:intensitiesData", "PublishScan.inputs:intensitiesData"),
                     ("ReadLidar.outputs:numCols", "PublishScan.inputs:numCols"),
                     ("ReadLidar.outputs:numRows", "PublishScan.inputs:numRows"),
                     ("ReadLidar.outputs:rotationRate", "PublishScan.inputs:rotationRate"),

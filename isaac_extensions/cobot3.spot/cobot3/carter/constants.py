@@ -18,8 +18,8 @@ CARTER_LIDAR_FRAME = f"{CARTER_NS}/laser"
 CARTER_PRIM_PATH = "/World/Carter"
 CARTER_CHASSIS_PRIM_PATH = f"{CARTER_PRIM_PATH}/chassis_link"
 # BASE nova_carter.usd — Nova_Carter_ROS.usd's built-in publishers would
-# clash with our OmniGraph stack.
-CARTER_USD_NUCLEUS_PATH = "/Isaac/Robots/NVIDIA/NovaCarter/nova_carter.usd"
+# clash with our OmniGraph stack. Relative to Isaac's assets root.
+CARTER_USD_ASSET_REL_PATH = "Isaac/Robots/NVIDIA/NovaCarter/nova_carter.usd"
 CARTER_SPAWN_POSITION = (24.0, 29.0, 0.5)
 CARTER_SPAWN_YAW_DEG = 0.0
 
