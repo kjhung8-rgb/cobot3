@@ -28,6 +28,7 @@ setup(
     entry_points={
         "console_scripts": [
             "yolo_detector = yolo.yolo_detector:main",
+            "yolo_detector_auto = yolo.launch_yolo_detector:main",
             "survivor_pose_to_marker = yolo.survivor_pose_to_marker:main",
         ],
     },

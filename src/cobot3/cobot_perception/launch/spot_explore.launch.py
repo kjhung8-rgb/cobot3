@@ -26,14 +26,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# ultralytics is only installed in the perception venv interpreter.
-# Mirror yolo_pipeline.launch.py so yolo_detector here uses the same prefix.
-PERCEPTION_VENV_PYTHON = os.environ.get(
-    "PERCEPTION_VENV_PYTHON",
-    "/home/rokey/dev_ws/venv/perception/bin/python",
-)
-
-
 def _load_speed_config(pkg_nav):
     speed_path = os.path.join(pkg_nav, "config", "spot_speed.yaml")
     with open(speed_path, "r", encoding="utf-8") as f:
@@ -103,7 +95,7 @@ def generate_launch_description():
                 description="Start the standalone RViz window.",
             ),
             Node(
-                package="cobot_core",
+                package="cobot_perception",
                 executable="scan_sanitizer",
                 name="spot_slam_scan_sanitizer",
                 output="screen",
@@ -121,7 +113,7 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="cobot_core",
+                package="cobot_perception",
                 executable="scan_sanitizer",
                 name="spot_nav_scan_sanitizer",
                 output="screen",
@@ -206,18 +198,13 @@ def generate_launch_description():
                     {"dampening_hold_sec": float(speed["yolo_hold_sec"])},
                 ],
             ),
-            # ── Pure CPP architecture ──
-            # explore_lite and camera_coverage_sweep are both gone. A single
-            # coverage_path_planner generates a grid of waypoints on
-            # SLAM-free space (spaced = camera range) and visits each one,
-            # spinning at each so the camera covers all directions.
-            # No frontier algorithm → no instant-success / blacklist / etc.
+            # A single coverage_path_planner generates a grid of waypoints on
+            # SLAM-free space and visits each one so the cameras cover the map.
             Node(
                 package="yolo",
-                executable="yolo_detector",
+                executable="yolo_detector_auto",
                 name="yolo_detector",
                 output="screen",
-                prefix=PERCEPTION_VENV_PYTHON,
                 additional_env={
                     "MPLCONFIGDIR": "/tmp/matplotlib",
                     "YOLO_CONFIG_DIR": "/tmp/Ultralytics",

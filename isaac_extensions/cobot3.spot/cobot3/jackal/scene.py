@@ -1,10 +1,4 @@
-"""Scene helper for spawning Clearpath Jackal as the secondary robot.
-
-Mirrors the Carter spawn pattern in spot/scene.py:_add_carter but kept as a
-free function so spot/scene.py only needs one lazy import + one branch to
-wire it in. The panel module sets ``sample._secondary_spawn`` to this
-function before ``load_world_async()`` runs.
-"""
+"""Scene helper for spawning Clearpath Jackal as the secondary robot."""
 
 from __future__ import annotations
 
@@ -46,7 +40,7 @@ def _yaw_to_quat_wxyz(yaw_deg):
 
 
 def add_jackal_to_world(sample):
-    """Spawn Clearpath Jackal in place of Carter. Sets ``sample.jackal``.
+    """Spawn Clearpath Jackal and set ``sample.jackal``.
 
     Idempotent: 튜닝 USD에 이미 /World/Jackal이 있으면 reference 단계 skip하고
     SingleArticulation으로 existing prim wrap만 수행.

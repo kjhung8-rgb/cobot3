@@ -61,9 +61,9 @@ class SpotFireRescue(BaseSample):
     This class owns the Isaac world, Spot RL policy, and physics callbacks.
     ROS graph creation lives in ros_graphs.py so extension.py can stay small.
 
-    Optional secondary robots (Carter, Jackal) plug in via the
-    ``_secondary_spawn`` callback: the panel module sets it to a free
-    function ``(sample) -> None`` before ``load_world_async()`` runs.
+    Jackal plugs in via the ``_secondary_spawn`` callback: the panel module
+    sets it to a free function ``(sample) -> None`` before
+    ``load_world_async()`` runs.
     """
 
     def __init__(self):
@@ -78,10 +78,9 @@ class SpotFireRescue(BaseSample):
         self.spot = None
         self._event_timer_callback = None
 
-        # Optional secondary-robot spawn callback. Set externally by a
-        # carter/jackal panel handler BEFORE load_world_async() kicks off
-        # setup_scene(). Signature: callable(self) -> None. Leave as None to
-        # spawn Spot alone.
+        # Optional Jackal spawn callback. Set externally by the Jackal panel
+        # handler BEFORE load_world_async() kicks off setup_scene().
+        # Signature: callable(self) -> None. Leave as None to spawn Spot alone.
         self._secondary_spawn = None
 
         # Optional ROS objects created by ros_graphs.setup_slam_sensors().
@@ -156,12 +155,6 @@ class SpotFireRescue(BaseSample):
         self._event_timer_callback = timeline.get_timeline_event_stream().create_subscription_to_pop_by_type(
             int(omni.timeline.TimelineEventType.PLAY), self._on_timeline_play
         )
-
-    def _add_carter(self):
-        """Backward-compatible Carter spawn hook."""
-        from ..carter.scene import add_carter_to_world
-
-        add_carter_to_world(self)
 
     def _add_cameras(self):
         """Add camera prims used by YOLO/depth localization."""

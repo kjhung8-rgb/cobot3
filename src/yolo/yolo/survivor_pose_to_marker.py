@@ -1,6 +1,5 @@
 """Subscribe to survivor PoseStamped; publish RViz Marker (red X + center sphere).
 
-Use until survivor_detector publishes the same PoseStamped from YOLO+localization.
 Temporary test: ros2 topic pub --once /detected_survivor_pose geometry_msgs/msg/PoseStamped '...'
 """
 

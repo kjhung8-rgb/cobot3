@@ -10,8 +10,6 @@
 # SpotObstaclePublisher (dual PointCloud2: clearing at 2m, marking at 0.5m),
 # giving a ~1m exclusion zone around Spot (after costmap inflation).
 #
-# Same RewrittenYaml + explicit Node namespace pattern as carter_navigate.
-#
 # Prerequisites (all on the same ROS_DOMAIN_ID):
 #   - cobot3.spot Isaac extension: Load Scene (Jackal) + Play + Setup Spot ROS
 #   - cobot3.spot Jackal button: J. Setup Jackal ROS (CmdVel + Odom/TF)
@@ -84,7 +82,7 @@ def generate_launch_description():
             # inf로 치환. 그래야 jackal scan-based obstacle_layer가 spot을
             # obstacle로 안 봄 → 상호 마스킹 (spot이 jackal 안 보는 것의 대칭).
             Node(
-                package="cobot_core",
+                package="cobot_perception",
                 executable="scan_sanitizer",
                 name="jackal_nav_scan_sanitizer",
                 output="screen",

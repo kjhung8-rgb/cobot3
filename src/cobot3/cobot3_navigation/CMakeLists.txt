@@ -3,11 +3,6 @@ project(cobot3_navigation)
 
 find_package(ament_cmake REQUIRED)
 
-# Install launch files
-install(DIRECTORY launch/
-  DESTINATION share/${PROJECT_NAME}/launch
-)
-
 # Install parameter files
 install(DIRECTORY params/
   DESTINATION share/${PROJECT_NAME}/params
@@ -18,25 +13,9 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
-# Map files are gitignored (see repo .gitignore); install only when present locally.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/maps")
-  install(DIRECTORY maps/
-    DESTINATION share/${PROJECT_NAME}/maps
-  )
-endif()
-
-# Install RViz configs
-install(DIRECTORY rviz2/
-  DESTINATION share/${PROJECT_NAME}/rviz2
-)
-
 # Install Python scripts as executables
 install(PROGRAMS
   scripts/cmd_vel_relay.py
-  scripts/anymal_cmd_vel_relay.py
-  scripts/map_odom_bootstrap.py
-  scripts/publish_isaac_spawn_pose.py
-  scripts/publish_anymal_spawn_pose.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

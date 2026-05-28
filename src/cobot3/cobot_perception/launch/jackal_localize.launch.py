@@ -8,8 +8,6 @@
 # its spawn, so jackal_0/odom → jackal_0/base_link drifts are the only error
 # source. For short warehouse runs this is acceptable without loop closure.
 #
-# Run EITHER carter_localize.launch.py OR this — not both simultaneously.
-#
 # Prerequisites:
 #   - cobot3.spot Isaac extension: Load Scene (Jackal) + Play + Setup Spot ROS
 #   - cobot3.spot Jackal button: J. Setup Jackal ROS (CmdVel + Odom/TF)

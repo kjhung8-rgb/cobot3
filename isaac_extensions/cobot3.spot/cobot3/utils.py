@@ -1,8 +1,4 @@
-"""Shared utility helpers for the cobot3.spot Isaac Sim extension.
-
-Lives at the cobot3/ package root so spot, carter, and jackal subpackages
-can all import from it without crossing each other's namespaces.
-"""
+"""Shared utility helpers for the cobot3.spot Isaac Sim extension."""
 
 from __future__ import annotations
 

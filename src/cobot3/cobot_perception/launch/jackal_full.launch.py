@@ -1,7 +1,4 @@
-# Cobot3 full stack (Jackal variant) — single-terminal launcher.
-#
-# Mirrors cobot3_full.launch.py but swaps carter_localize/carter_navigate for
-# the jackal equivalents.
+# Cobot3 full Spot + Jackal stack — single-terminal launcher.
 #
 # spot_explore.launch.py already spawns yolo_detector + survivor_pose_to_marker
 # inline, so we do NOT include yolo_pipeline.launch.py here (would duplicate).

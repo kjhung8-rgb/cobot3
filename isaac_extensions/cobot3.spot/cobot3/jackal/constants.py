@@ -1,9 +1,4 @@
-"""Constants for the optional Clearpath Jackal secondary robot.
-
-Same architecture as Carter (differential drive, 2D LiDAR), tuned for Jackal's
-smaller footprint (0.51 x 0.43 m) and lighter dynamics. Jackal and Carter are
-mutually exclusive — pick one before calling load_world_async().
-"""
+"""Constants for the Clearpath Jackal secondary robot."""
 
 JACKAL_NS = "jackal_0"
 JACKAL_CMD_VEL_TOPIC = f"/{JACKAL_NS}/cmd_vel"

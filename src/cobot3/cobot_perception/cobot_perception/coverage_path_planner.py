@@ -2,8 +2,7 @@
 
 Drives the robot to a grid of waypoints spaced ``waypoint_spacing_m``
 apart (default = camera range, so the camera covers every cell as the
-robot passes through). Replaces explore_lite + camera_coverage_sweep
-entirely.
+robot passes through).
 
 Waypoint generation:
     1. Read /global_costmap/costmap (so inflation is already accounted for).

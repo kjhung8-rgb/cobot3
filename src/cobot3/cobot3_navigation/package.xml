@@ -3,23 +3,16 @@
 <package format="3">
   <name>cobot3_navigation</name>
   <version>0.1.0</version>
-  <description>Nav2 launch, Carter warehouse map, and robot topic relay for cobot3 Isaac Sim (Spot + ANYmal C).</description>
+  <description>Nav2 parameters and command relay for the Cobot3 Spot + Jackal flow.</description>
   <maintainer email="rokey@todo.todo">rokey</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
-  <exec_depend>nav2_bringup</exec_depend>
-  <exec_depend>nav2_common</exec_depend>
   <exec_depend>nav2_mppi_controller</exec_depend>
-  <exec_depend>cobot_core</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>rviz2</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -1,15 +1,8 @@
-# Jackal NAV2 params — drop-in alternative to carter_nav2_params.yaml.
-#
-# Jackal is ~30% smaller than Carter (0.51 × 0.43 m vs 0.74 × 0.53 m), so:
-#   - footprint shrunk to roughly half-size box around base_link
-#   - inflation_radius reduced from 0.5 → 0.35 (smaller robot = tighter clearance)
-#   - MPPI vx_max lowered to 0.7 (Jackal recommended ≤ 1.0)
-#   - velocity_smoother capped at 0.8 m/s linear
+# Jackal NAV2 params for the Cobot3 Spot + Jackal rescue flow.
 #
 # All sensor topics and frames are absolute and jackal-prefixed
 # (/jackal_0/odom, /jackal_0/scan_nav, jackal_0/base_link, ...) so they
-# resolve correctly even when shared with spot's nav-free SLAM stack on
-# the same ROS_DOMAIN_ID.
+# resolve correctly alongside Spot on the same ROS_DOMAIN_ID.
 
 bt_navigator:
   ros__parameters:

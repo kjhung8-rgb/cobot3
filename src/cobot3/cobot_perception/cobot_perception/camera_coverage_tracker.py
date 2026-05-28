@@ -1,9 +1,9 @@
 """Track which map cells the robot cameras have actually seen.
 
-Background: explore_lite drives the robot toward LiDAR-unknown cells. But
-the LiDAR has 360-deg / 25 m reach, so it maps rooms through doorways from
-the corridor and the robot never enters. The camera (~70-deg FOV) misses
-everyone inside those rooms.
+Background: LiDAR can map rooms through doorways from the corridor while
+the camera (~70-deg FOV) may still miss people inside. Tracking actual
+camera coverage gives the planner and GUI a better signal than occupancy
+alone.
 
 This node maintains a *second* grid aligned with SLAM /map:
   -1 = camera has not seen this cell
@@ -14,9 +14,7 @@ Then it republishes the SLAM map masked by this grid as /map_explorable:
   free (0 in /map) AND camera-seen     -> 0    (free)
   everything else                      -> -1   (unknown)
 
-If global_costmap.static_layer.map_topic is pointed at /map_explorable,
-the cells the camera has never looked at become frontiers for explore_lite,
-forcing the robot to physically visit every region.
+The coverage grid is also published for RViz/GUI visualization.
 """
 
 from __future__ import annotations
@@ -402,16 +400,15 @@ class CameraCoverageTracker(Node):
         # /map_explorable:
         #   obstacle  -> 100 (always preserved so Nav2 sees walls)
         #   free + camera-seen -> 0
-        #   otherwise -> -1 (unknown → becomes a frontier for explore_lite)
+        #   otherwise -> -1 (unknown to the coverage map)
         obstacle = self._map_data > 50
         free_seen = (self._map_data == 0) & (self._coverage == 0)
         exp = np.full_like(self._map_data, -1)
         exp[free_seen] = 0
         exp[obstacle] = 100
 
-        # Zone mask: cells outside the active quadrant become obstacle so
-        # explore_lite's BFS cannot wander there. Once _zone_all_done is set
-        # we stop masking and let it finish anything left.
+        # Zone mask: cells outside the active quadrant become obstacles in
+        # /map_explorable. Once _zone_all_done is set we stop masking.
         if (self._enable_zones
                 and not self._zone_all_done
                 and self._zone_center_x is not None):

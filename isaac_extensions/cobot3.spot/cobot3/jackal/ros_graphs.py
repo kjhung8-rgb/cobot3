@@ -1,13 +1,9 @@
-"""ROS2 OmniGraph setup helpers for the optional Clearpath Jackal robot.
-
-Mirror of carter_ros_graphs.py — Jackal is a smaller, skid-steer alternative
-that drops into the same /map produced by spot SLAM. Run either Carter OR
-Jackal, not both at once (separate UI buttons in extension.py).
+"""ROS2 OmniGraph setup helpers for the Clearpath Jackal robot.
 
 Notes:
 
-* All TF timestamps come from IsaacReadSystemTime — same reason as Carter:
-  spot graphs and LidarHelper use system time, mixing sim/system breaks AMCL.
+* All TF timestamps come from IsaacReadSystemTime. Spot graphs and
+  LidarHelper use system time, and mixing sim/system time breaks TF consumers.
 * Jackal is skid-steer (4 wheels). The DifferentialController outputs 2
   velocities (left, right) and the ArticulationController broadcasts each
   side's velocity to its two wheels via the joint name ordering in

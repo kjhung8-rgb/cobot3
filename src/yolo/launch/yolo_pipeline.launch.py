@@ -7,15 +7,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# ultralytics is installed in the venv perception interpreter, not in
-# Isaac Sim's bundled python or system ROS python. yolo_detector must be
-# launched via this interpreter or `import ultralytics` fails immediately.
-PERCEPTION_VENV_PYTHON = os.environ.get(
-    "PERCEPTION_VENV_PYTHON",
-    "/home/rokey/dev_ws/venv/perception/bin/python",
-)
-
-
 def generate_launch_description():
     pkg_yolo = get_package_share_directory("yolo")
     detector_params = os.path.join(pkg_yolo, "config", "yolo_detector.yaml")
@@ -33,10 +24,9 @@ def generate_launch_description():
             ),
             Node(
                 package="yolo",
-                executable="yolo_detector",
+                executable="yolo_detector_auto",
                 name="yolo_detector",
                 output="screen",
-                prefix=PERCEPTION_VENV_PYTHON,
                 additional_env={
                     "MPLCONFIGDIR": "/tmp/matplotlib",
                     "YOLO_CONFIG_DIR": "/tmp/Ultralytics",

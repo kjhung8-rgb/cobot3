@@ -8,8 +8,8 @@ extension.py wires this in with three calls inside its ``omni.ui`` frame:
         build_jackal_topic_labels,
     )
     ...
-    build_jackal_load_button(self)   # next to Carter's Load Scene button
-    build_jackal_panel(self)         # after Carter ROS2 graph buttons
+    build_jackal_load_button(self)
+    build_jackal_panel(self)
     build_jackal_topic_labels()      # in the topic display section
 
 Drop the spot/jackal/ folder and remove those three calls + the import to
@@ -38,8 +38,7 @@ from .scene import add_jackal_to_world
 
 
 def build_jackal_load_button(ext):
-    """Place the 'Load Scene (Jackal)' button. Call this immediately after
-    extension.py's main 'Load Scene (Carter)' button so both sit together."""
+    """Place the 'Load Scene (Jackal)' button."""
     ui.Button("1-J. Load Scene (Jackal)", clicked_fn=lambda: _load_scene_jackal(ext))
 
 
@@ -58,8 +57,7 @@ def _setup_jackal_all():
 
 
 def build_jackal_panel(ext):  # noqa: ARG001 — keep signature symmetric with build_jackal_load_button
-    """Place the Jackal ROS2 graph setup button (single combined trigger).
-    Call inside the main extension UI frame, after the Carter ROS2 section."""
+    """Place the Jackal ROS2 graph setup button."""
     ui.Label("[ Jackal ROS2 그래프 ]", style={"font_size": 12})
     ui.Button(
         "J. Setup Jackal ROS (CmdVel + Odom/TF)",
@@ -79,8 +77,7 @@ def build_jackal_topic_labels():
 def _load_scene_jackal(ext):
     ext._sample = SpotFireRescue()
     # Register the Jackal spawn helper as the secondary-robot callback. The
-    # main scene reads this in setup_scene() and calls it in place of the
-    # default _add_carter().
+    # main scene reads this in setup_scene().
     ext._sample._secondary_spawn = add_jackal_to_world
     asyncio.ensure_future(ext._sample.load_world_async())
     print("[cobot3.spot] Scene 로딩 중... (Jackal 모드, 잠시 기다려주세요)")
