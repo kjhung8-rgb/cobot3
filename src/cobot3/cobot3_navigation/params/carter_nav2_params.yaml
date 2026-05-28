@@ -1,68 +1,25 @@
-amcl:
-  ros__parameters:
-    use_sim_time: True
-    alpha1: 0.2
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.2
-    alpha5: 0.2
-    base_frame_id: "spot_0/base_link"
-    beam_skip_distance: 0.5
-    beam_skip_error_threshold: 0.9
-    beam_skip_threshold: 0.3
-    do_beamskip: false
-    global_frame_id: "map"
-    lambda_short: 0.1
-    laser_likelihood_max_dist: 2.0
-    laser_max_range: 100.0
-    laser_min_range: 1.0
-    laser_model_type: "likelihood_field"
-    max_beams: 360
-    max_particles: 2000
-    min_particles: 500
-    odom_frame_id: "odom"
-    pf_err: 0.05
-    pf_z: 0.99
-    recovery_alpha_fast: 0.0
-    recovery_alpha_slow: 0.0
-    resample_interval: 3
-    robot_model_type: "nav2_amcl::OmniMotionModel"
-    save_pose_rate: 0.5
-    sigma_hit: 0.2
-    tf_broadcast: true
-    transform_tolerance: 1.0
-    update_min_a: 0.2
-    update_min_d: 0.25
-    z_hit: 0.5
-    z_max: 0.05
-    z_rand: 0.5
-    z_short: 0.05
-    scan_topic: /spot_0/scan_nav
-    map_topic: map
-    # Pose comes from ~/.cobot3/spot_spawn_pose.json via publish_isaac_spawn_pose.py (Isaac Load Scene).
-    set_initial_pose: false
-    always_reset_initial_pose: false
-    first_map_only: false
+# Carter NAV2 params (standard nav2 form — relative root keys).
+#
+# Loaded verbatim by carter_navigate.launch.py into nav2 nodes that live
+# under /carter_0 namespace. RewrittenYaml is intentionally NOT used:
+# ROS2's relative root key matching (bt_navigator:, controller_server:, ...)
+# binds these params regardless of node namespace, which sidesteps the
+# humble nav2_bringup root_key matching failure on nested plugin params
+# (obstacle_layer.scan.topic etc.).
+#
+# All sensor topics and frames are absolute and carter-prefixed
+# (/carter_0/odom, /carter_0/scan_nav, carter_0/base_link, ...) so they
+# resolve correctly even when shared with spot's nav-free SLAM stack on
+# the same ROS_DOMAIN_ID.
 
-amcl_map_client:
-  ros__parameters:
-    use_sim_time: True
-
-amcl_rclcpp_node:
-  ros__parameters:
-    use_sim_time: True
 bt_navigator:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     global_frame: map
-    robot_base_frame: spot_0/base_link
-    odom_topic: /spot_0/odom
+    robot_base_frame: carter_0/base_link
+    odom_topic: /carter_0/odom
     bt_loop_duration: 20
     default_server_timeout: 40
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
     plugin_lib_names:
     - nav2_compute_path_to_pose_action_bt_node
     - nav2_compute_path_through_poses_action_bt_node
@@ -108,27 +65,24 @@ bt_navigator:
     - nav2_back_up_cancel_bt_node
     - nav2_drive_on_heading_cancel_bt_node
 
-bt_navigator_rclcpp_node:
+velocity_smoother:
   ros__parameters:
-    use_sim_time: True
-
-velocity_smoother: 
-  ros__parameters: 
-    smoothing_frequency: 20.0 
-    scale_velocities: false 
-    feedback: "OPEN_LOOP" 
-    max_velocity: [2.40, 0.50, 2.40]
-    min_velocity: [-0.50, -0.50, -2.40]
-    deadband_velocity: [0.0, 0.0, 0.0] 
-    velocity_timeout: 1.0 
-    max_accel: [1.5, 0.8, 1.5] 
-    max_decel: [-1.5, -0.8, -1.5] 
-    odom_topic: "/spot_0/odom" 
+    use_sim_time: False
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [1.0, 0.0, 1.5]
+    min_velocity: [-0.5, 0.0, -1.5]
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+    max_accel: [1.0, 0.0, 1.5]
+    max_decel: [-1.0, 0.0, -1.5]
+    odom_topic: "/carter_0/odom"
     odom_duration: 0.1
 
 controller_server:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
@@ -137,60 +91,41 @@ controller_server:
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
-
-    # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.25
       movement_time_allowance: 15.0
-    # Goal checker parameters
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 0.30
       stateful: True
-    # MPPI follows the Spot Isaac driver pattern, adapted to this extension's
-    # /spot_0 frame and topic contract.
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 56
       model_dt: 0.05
       batch_size: 1800
       vx_std: 0.20
-      vy_std: 0.0
+      vy_std: 0.05
       wz_std: 0.30
-      # Forward-only exploration: vx_min=0 prevents reverse, vy_max=0 prevents
-      # lateral strafe. motion_model: DiffDrive forces in-place turn before
-      # driving so the camera always faces the direction of travel.
-      vx_max: 1.90
-      vx_min: 0.0
-      vy_max: 0.0
-      wz_max: 1.90
-      ax_max: 2.0
-      ax_min: -2.0
-      ay_max: 1.2
-      ay_min: -1.2
-      az_max: 2.4
+      vx_max: 0.9
+      vx_min: -0.4
+      vy_max: 0.05
+      wz_max: 1.4
+      ax_max: 1.5
+      ax_min: -1.5
+      ay_max: 0.05
+      ay_min: -0.05
+      az_max: 2.0
       iteration_count: 1
       prune_distance: 1.7
-      transform_tolerance: 0.2
+      transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
       visualize: true
       regenerate_noises: true
-      critics:
-        [
-          "ConstraintCritic",
-          "CostCritic",
-          "GoalCritic",
-          "GoalAngleCritic",
-          "PathAlignCritic",
-          "PathFollowCritic",
-          "PathAngleCritic",
-          "PreferForwardCritic",
-          "TwirlingCritic",
-        ]
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
       ConstraintCritic:
         enabled: true
         cost_power: 1
@@ -208,7 +143,7 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
+        cost_weight: 2.0
         threshold_to_consider: 0.5
       CostCritic:
         enabled: true
@@ -243,123 +178,86 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0
-      TwirlingCritic:
-        enabled: true
-        twirling_cost_power: 1
-        twirling_cost_weight: 8.0
-
-controller_server_rclcpp_node:
-  ros__parameters:
-    use_sim_time: True
 
 local_costmap:
   local_costmap:
     ros__parameters:
+      use_sim_time: False
       update_frequency: 5.0
       publish_frequency: 2.0
-      footprint_padding: 0.25
-      global_frame: odom
-      robot_base_frame: spot_0/base_link
-      use_sim_time: True
+      footprint_padding: 0.1
+      global_frame: carter_0/odom
+      robot_base_frame: carter_0/base_link
       rolling_window: True
-      width: 10
-      height: 10
+      width: 8
+      height: 8
       resolution: 0.05
-      transform_tolerance: 0.3
-      footprint: "[[0.32, 0.22], [0.32, -0.22], [-0.32, -0.22], [-0.32, 0.22]]"
+      transform_tolerance: 0.5
+      footprint: "[[0.35, 0.25], [0.35, -0.25], [-0.35, -0.25], [-0.35, 0.25]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: True
-        cost_scaling_factor: 0.3
-        inflation_radius: 1.0
+        cost_scaling_factor: 0.5
+        inflation_radius: 0.5
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
         observation_sources: scan
         scan:
-          topic: /spot_0/scan_nav
+          topic: /carter_0/scan_nav
           max_obstacle_height: 2.0
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 12.0
-          raytrace_min_range: 1.0
-          obstacle_max_range: 12.0
-          obstacle_min_range: 1.0
-  local_costmap_client:
-    ros__parameters:
-      use_sim_time: True
-  local_costmap_rclcpp_node:
-    ros__parameters:
-      use_sim_time: True
-
-
+          raytrace_max_range: 20.0
+          raytrace_min_range: 0.4
+          obstacle_max_range: 20.0
+          obstacle_min_range: 0.4
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      footprint_padding: 0.25
+      use_sim_time: False
+      footprint_padding: 0.1
       update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: map
-      robot_base_frame: spot_0/base_link
-      use_sim_time: True
-      footprint: "[[0.32, 0.22], [0.32, -0.22], [-0.32, -0.22], [-0.32, 0.22]]"
-      # rolling_window: True
-      # width: 200
-      # height: 200
+      robot_base_frame: carter_0/base_link
+      footprint: "[[0.35, 0.25], [0.35, -0.25], [-0.35, -0.25], [-0.35, 0.25]]"
       resolution: 0.05
-      # origin_x: -100.0
-      # origin_y: -100.0
-      # Required for explore_lite: keep UNKNOWN cells distinct from FREE so
-      # frontiers (FREE↔UNKNOWN boundary) exist. Without this the static_layer
-      # converts SLAM unknowns to free and exploration finds 0 frontiers.
+      transform_tolerance: 1.0
       track_unknown_space: True
-      # obstacle_layer is removed from the global costmap because its LiDAR
-      # clearing would re-mark camera-unseen cells as FREE, defeating the
-      # /map_explorable mask. Walls/obstacles still come in through the
-      # static_layer (which gets them from /map_explorable). Dynamic
-      # collision avoidance lives in the local_costmap (unchanged).
-      plugins: ["static_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
         track_unknown_space: True
-        # ── NEW ARCH (2-phase) ──
-        # Use raw SLAM /map. explore_lite drives LiDAR-frontier mapping
-        # (Phase 1). camera_coverage_sweep node then visits camera-unseen
-        # SLAM-free areas (Phase 2), independently of the costmap.
         map_topic: /map
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /carter_0/scan_nav
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 20.0
+          raytrace_min_range: 0.4
+          obstacle_max_range: 20.0
+          obstacle_min_range: 0.4
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 0.3
-        inflation_radius: 1.0
+        cost_scaling_factor: 0.5
+        inflation_radius: 0.5
       always_send_full_costmap: True
-  global_costmap_client:
-    ros__parameters:
-      use_sim_time: True
-  global_costmap_rclcpp_node:
-    ros__parameters:
-      use_sim_time: True
-
-map_server:
-  ros__parameters:
-    use_sim_time: True
-    yaml_filename: "spot0_map.yaml"
-
-map_saver:
-  ros__parameters:
-    use_sim_time: True
-    save_map_timeout: 5000
-    free_thresh_default: 0.25
-    occupied_thresh_default: 0.65
-    map_subscribe_transient_local: True
 
 planner_server:
   ros__parameters:
+    use_sim_time: False
     expected_planner_frequency: 10.0
-    use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
@@ -367,13 +265,9 @@ planner_server:
       use_astar: false
       allow_unknown: true
 
-planner_server_rclcpp_node:
-  ros__parameters:
-    use_sim_time: True
-
 smoother_server:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     smoother_plugins: ["simple_smoother"]
     simple_smoother:
       plugin: "nav2_smoother::SimpleSmoother"
@@ -383,6 +277,7 @@ smoother_server:
 
 behavior_server:
   ros__parameters:
+    use_sim_time: False
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 5.0
@@ -395,22 +290,17 @@ behavior_server:
       plugin: "nav2_behaviors/DriveOnHeading"
     wait:
       plugin: "nav2_behaviors/Wait"
-    global_frame: odom
-    robot_base_frame: spot_0/base_link
-    transform_tolerance: 0.2
-    use_sim_time: true
+    global_frame: carter_0/odom
+    robot_base_frame: carter_0/base_link
+    transform_tolerance: 0.5
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
-
-robot_state_publisher:
-  ros__parameters:
-    use_sim_time: True
+    min_rotational_vel: 0.3
+    rotational_acc_lim: 2.0
 
 waypoint_follower:
   ros__parameters:
-    use_sim_time: True
+    use_sim_time: False
     loop_rate: 20
     stop_on_failure: false
     waypoint_task_executor_plugin: "wait_at_waypoint"

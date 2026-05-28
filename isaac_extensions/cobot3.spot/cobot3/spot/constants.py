@@ -91,11 +91,22 @@ CAMERA_SPECS = (
     },
 )
 
+# Front-facing headlight on Spot's head. Parented under /World/Spot/body so it
+# moves with the robot. SphereLight + ShapingAPI gives a directional cone.
+# ShapingAPI cone narrows the light → intensity must be MUCH higher than a
+# bare SphereLight to be visible. Warehouse scenes also need viewport's
+# "Lights Off" toggle to be set to ON.
+HEADLIGHT_PRIM_PATH = "/World/Spot/body/headlight"
+HEADLIGHT_TRANSLATION = (0.5, 0.0, 0.35)        # 앞·중앙·머리 위
+HEADLIGHT_ROTATION_XYZ_DEG = (0.0, 90.0, 0.0)   # -Z 기본 cone을 +X(전방)로
+HEADLIGHT_INTENSITY = 800000.0                   # cone으로 좁힌 효과를 보상 (10배 상향)
+HEADLIGHT_RADIUS = 0.1                           # 더 큰 emitter → 부드러운 빛
+HEADLIGHT_CONE_ANGLE_DEG = 60.0                  # cone 반각 (전방 시야 충분히 커버)
+HEADLIGHT_COLOR_RGB = (1.0, 1.0, 0.92)           # 약간 warm white
+
 CMD_VEL_GRAPH_PATH = "/World/Spot_CmdVel_Graph"
 CAMERA_GRAPH_PATH = "/World/Spot_Camera_Graph"
 SLAM_GRAPH_PATH = "/World/Spot_SLAM_Graph"
-
-DEFAULT_ROS_DOMAIN_ID = 141
 
 # ROS cmd_vel to Spot policy command scale.
 CMD_VEL_TO_POLICY_LINEAR_X_SCALE = 2.0

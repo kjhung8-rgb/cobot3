@@ -30,6 +30,8 @@ setup(
             'coverage_path_planner = cobot_perception.coverage_path_planner:main',
             'stop_watchdog = cobot_perception.stop_watchdog:main',
             'monitoring_gui = cobot_perception.monitoring_gui:main',
+            'mission_manager = cobot_perception.mission_manager:main',
+            'spot_obstacle_publisher = cobot_perception.spot_obstacle_publisher:main',
         ],
     },
 )

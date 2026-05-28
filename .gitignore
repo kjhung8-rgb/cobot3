@@ -52,3 +52,6 @@ src/yolo/dectected_person/*.PNG
 
 # .codex 파일
 *.codex
+
+# .usd 파일
+*.usd
