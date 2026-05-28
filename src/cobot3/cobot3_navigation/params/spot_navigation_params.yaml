@@ -121,8 +121,8 @@ velocity_smoother:
     min_velocity: [-0.50, -0.50, -2.40]
     deadband_velocity: [0.0, 0.0, 0.0] 
     velocity_timeout: 1.0 
-    max_accel: [1.0, 0.6, 1.2] 
-    max_decel: [-1.0, -0.6, -1.2] 
+    max_accel: [1.5, 0.8, 1.5] 
+    max_decel: [-1.5, -0.8, -1.5] 
     odom_topic: "/spot_0/odom" 
     odom_duration: 0.1
 

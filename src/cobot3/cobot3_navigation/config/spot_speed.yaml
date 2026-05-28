@@ -1,6 +1,6 @@
 spot_speed:
   # Normal autonomous exploration command limits used by Nav2 MPPI.
-  default_linear_mps: 1.9
+  default_linear_mps: 2.2
   default_angular_radps: 1.9
 
   # Absolute command limits used by velocity_smoother and Isaac policy clamp.

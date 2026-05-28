@@ -33,6 +33,7 @@ from .constants import (
     LIDAR_PRIM_PATH,
     ODOM_FRAME,
     ODOM_TOPIC,
+    ROBOT_NS,
     SCAN_TOPIC,
     SLAM_GRAPH_PATH,
     SPOT_PRIM_PATH,
@@ -123,6 +124,13 @@ def _node_suffix(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_"))
 
 
+def _topic_in_robot_namespace(topic: str) -> str:
+    prefix = f"/{ROBOT_NS}/"
+    if topic.startswith(prefix):
+        return topic[len(prefix):]
+    return topic.lstrip("/")
+
+
 def setup_camera_graph(sample):
     """Publish RGB/depth/camera_info for all Spot cameras."""
     if sample is None:
@@ -182,13 +190,16 @@ def setup_camera_graph(sample):
                 (f"{render}.inputs:width", FRONT_CAMERA_RENDER_WIDTH),
                 (f"{render}.inputs:height", FRONT_CAMERA_RENDER_HEIGHT),
                 (f"{rgb}.inputs:frameId", spec["frame"]),
-                (f"{rgb}.inputs:topicName", spec["color_topic"]),
+                (f"{rgb}.inputs:nodeNamespace", ROBOT_NS),
+                (f"{rgb}.inputs:topicName", _topic_in_robot_namespace(spec["color_topic"])),
                 (f"{rgb}.inputs:type", "rgb"),
                 (f"{depth}.inputs:frameId", spec["frame"]),
-                (f"{depth}.inputs:topicName", spec["depth_topic"]),
+                (f"{depth}.inputs:nodeNamespace", ROBOT_NS),
+                (f"{depth}.inputs:topicName", _topic_in_robot_namespace(spec["depth_topic"])),
                 (f"{depth}.inputs:type", "depth"),
                 (f"{info}.inputs:frameId", spec["frame"]),
-                (f"{info}.inputs:topicName", spec["camera_info_topic"]),
+                (f"{info}.inputs:nodeNamespace", ROBOT_NS),
+                (f"{info}.inputs:topicName", _topic_in_robot_namespace(spec["camera_info_topic"])),
             ]
         )
 
@@ -217,7 +228,7 @@ def setup_camera_graph(sample):
 # ─────────────────────────────────────────────
 # LiDAR helper
 # ─────────────────────────────────────────────
-LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, 0.35)
+LIDAR_TRANSLATION = Gf.Vec3d(0.25, 0.0, -0.4)
 LIDAR_ORIENTATION = Gf.Quatd(1.0, 0.0, 0.0, 0.0)
 LIDAR_TF_ROTATION_XYZW = [0.0, 0.0, 0.0, 1.0]
 
