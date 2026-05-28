@@ -254,6 +254,7 @@ class MonitorRosNode(Node):
         except Exception:
             return
         arr = self._downsample_image(arr)
+        now = time.monotonic()
         with self._lock:
             if annotated:
                 self._last_annotated_image_time[camera_name] = now
@@ -386,6 +387,12 @@ class MonitorRosNode(Node):
         with self._lock:
             self._robot_velocity = (linear, angular, time.time())
 
+    def _on_odom(self, msg: Odometry):
+        linear = msg.twist.twist.linear.x
+        angular = msg.twist.twist.angular.z
+        with self._lock:
+            self._robot_velocity = (linear, angular, time.time())
+
     def _tick_tf(self):
         try:
             tf = self._tf_buffer.lookup_transform(
@@ -409,6 +416,42 @@ class MonitorRosNode(Node):
                 )
         except Exception:
             pass
+
+    def _scan_to_map_points(self, msg: LaserScan) -> list[tuple[float, float]]:
+        frame_id = msg.header.frame_id or 'spot_0/lidar_link'
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'map', frame_id, rclpy.time.Time()
+            )
+        except Exception:
+            return []
+
+        t = tf.transform.translation
+        q = tf.transform.rotation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+
+        points: list[tuple[float, float]] = []
+        angle = msg.angle_min
+        # Cap work per scan; display density stays high enough for the GUI.
+        step = max(1, len(msg.ranges) // 1800)
+        for i, rng in enumerate(msg.ranges):
+            if i % step:
+                angle += msg.angle_increment
+                continue
+            if math.isfinite(rng) and msg.range_min <= rng <= msg.range_max:
+                lx = rng * math.cos(angle)
+                ly = rng * math.sin(angle)
+                points.append((
+                    t.x + cos_yaw * lx - sin_yaw * ly,
+                    t.y + sin_yaw * lx + cos_yaw * ly,
+                ))
+            angle += msg.angle_increment
+        return points
 
     def _scan_to_map_points(self, msg: LaserScan) -> list[tuple[float, float]]:
         frame_id = msg.header.frame_id or 'spot_0/lidar_link'
@@ -1974,6 +2017,29 @@ class MainWindow(QtWidgets.QMainWindow):
             t_elapsed = (time.time() - map_first_t) if map_first_t else None
             self.status_panel.update_state(snap, t_elapsed)
             self._last_status_update = now
+
+    @staticmethod
+    def _use_embedded_rviz() -> bool:
+        backend = os.environ.get('COBOT_GUI_MAP_BACKEND', 'qt').strip().lower()
+        return backend in ('rviz', 'embedded_rviz', 'embedded-rviz')
+
+    def _fallback_to_qt_map(self, reason: str):
+        if self._map_widget is self.map_panel:
+            return
+        old_widget = self._map_widget
+        index = self._map_layout.indexOf(old_widget)
+        if index < 0:
+            index = self._map_layout.count()
+        self._map_layout.removeWidget(old_widget)
+        old_widget.setParent(None)
+        old_widget.deleteLater()
+        self._map_layout.insertWidget(index, self.map_panel)
+        self._map_widget = self.map_panel
+        self._rviz_panel = None
+        self.statusBar().showMessage(
+            f'RViz 임베드 실패: {reason}. 기존 Qt 맵으로 전환했습니다.',
+            8000,
+        )
 
     @staticmethod
     def _use_embedded_rviz() -> bool:
